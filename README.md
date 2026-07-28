@@ -74,7 +74,26 @@ Client B spawns `uvx mcp-server-pgvector`.
 | PGVector tools (external) | `uvx mcp-server-pgvector` | `copilot_agent/mcp_clients.py`, system prompt |
 | `POST /api/messages` | `copilot_agent/app.py` | `test_ui/app.py` (`COPILOT_MESSAGES_URL`) |
 
-## Validation UI Bot Framework mock
+## Testing the Validation UI
 
-Outbound activities include `activityId`, `conversationId`, `channelId="emulator"`,
-plus nested `conversation.id` for compatibility with Bot Framework clients.
+Without Azure credentials, use the mock messages backend:
+
+```bash
+# Terminal A — mock Bot Framework /api/messages on :3978
+cd test_ui && .venv/bin/python mock_messages_server.py
+
+# Terminal B — Streamlit UI
+cd test_ui && .venv/bin/streamlit run app.py
+```
+
+Open `http://localhost:8501`, send a chat message, and confirm the assistant
+echo reply plus the expandable Bot Framework exchange (`channelId=emulator`).
+
+Automated checks:
+
+```bash
+cd test_ui && .venv/bin/python test_bot_schema.py
+cd test_ui && .venv/bin/python test_streamlit_ui.py
+```
+
+For a full path, run `copilot_agent/app.py` instead of the mock (requires `.env`).

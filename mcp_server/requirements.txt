@@ -1,0 +1,7 @@
+mcp[cli]>=1.6.0
+fastmcp>=2.0.0
+pyodbc>=5.1.0
+pandas>=2.2.0
+azure-search-documents>=11.6.0
+azure-identity>=1.19.0
+python-dotenv>=1.0.1

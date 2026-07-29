@@ -2,6 +2,8 @@
 Central cognitive processing node: AzureChatOpenAI + OpenAI tools agent.
 
 Strict routing boundary is enforced in the system prompt (not in mcp_server).
+Falls back to the offline MCP router when Azure OpenAI is firewalled (403) or
+when USE_OFFLINE_MOCKS / AZURE_OPENAI_FORCE_OFFLINE is enabled.
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ from langchain_openai import AzureChatOpenAI
 
 from config import get, require
 from mcp_clients import bridge
+from offline_router import run_offline_turn
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +52,26 @@ Rules:
 _agent_executor: AgentExecutor | None = None
 
 
+def _truthy(name: str) -> bool:
+    return get(name, "").lower() in {"1", "true", "yes", "on"}
+
+
+def _force_offline_llm() -> bool:
+    return _truthy("USE_OFFLINE_MOCKS") or _truthy("AZURE_OPENAI_FORCE_OFFLINE")
+
+
+def _is_azure_network_block(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    markers = (
+        "access denied due to virtual network/firewall rules",
+        "virtual network/firewall",
+        "error code: 403",
+        "permissiondenied",
+        "firewall rules",
+    )
+    return any(marker in text for marker in markers)
+
+
 def _build_llm() -> AzureChatOpenAI:
     return AzureChatOpenAI(
         azure_endpoint=require("AZURE_OPENAI_ENDPOINT"),
@@ -56,6 +79,8 @@ def _build_llm() -> AzureChatOpenAI:
         azure_deployment=require("AZURE_OPENAI_DEPLOYMENT_NAME"),
         api_version=get("AZURE_OPENAI_API_VERSION", "2024-08-01-preview"),
         temperature=0.1,
+        timeout=60,
+        max_retries=1,
     )
 
 
@@ -88,13 +113,31 @@ async def get_agent_executor() -> AgentExecutor:
 
 async def run_turn(user_text: str, chat_history: list[Any] | None = None) -> str:
     """Execute one cognitive turn; returns the final assistant text."""
-    executor = await get_agent_executor()
-    result = await executor.ainvoke(
-        {
-            "input": user_text,
-            "chat_history": chat_history or [],
-        }
-    )
+    if _force_offline_llm():
+        logger.warning(
+            "Using offline cognitive router "
+            "(USE_OFFLINE_MOCKS / AZURE_OPENAI_FORCE_OFFLINE enabled)"
+        )
+        return await run_offline_turn(user_text)
+
+    try:
+        executor = await get_agent_executor()
+        result = await executor.ainvoke(
+            {
+                "input": user_text,
+                "chat_history": chat_history or [],
+            }
+        )
+    except Exception as exc:
+        if _is_azure_network_block(exc):
+            logger.warning(
+                "Azure OpenAI blocked by network/firewall (%s); "
+                "falling back to offline cognitive router",
+                exc,
+            )
+            return await run_offline_turn(user_text)
+        raise
+
     output = result.get("output", "")
     if isinstance(output, AIMessage):
         return str(output.content)

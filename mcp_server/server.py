@@ -226,7 +226,7 @@ def get_vendor_spend_summary(max_rows: int = 200) -> str:
 @mcp.tool()
 def search_cloud_blob_contracts(
     query: str,
-    top: int = 5,
+    top: int = 20,
     filter_expression: str | None = None,
 ) -> str:
     """
@@ -239,7 +239,7 @@ def search_cloud_blob_contracts(
 
     Args:
         query: Natural-language search text.
-        top: Number of documents to return (default 5).
+        top: Number of documents to return (default 20).
         filter_expression: Optional OData filter on index fields.
 
     Returns:

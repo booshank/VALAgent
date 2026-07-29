@@ -90,7 +90,7 @@ def _summarize_sql_payload(raw: str, *, title: str, limit: int = 5) -> str:
     return "\n".join(lines)
 
 
-def _summarize_search_payload(raw: str, *, query: str, limit: int = 3) -> str:
+def _summarize_search_payload(raw: str, *, query: str, limit: int = 20) -> str:
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError:
@@ -145,8 +145,8 @@ async def run_offline_turn(user_text: str) -> str:
                 raw = await _ainvoke_tool(tool, max_rows=25)
                 sections.append(_summarize_sql_payload(raw, title="Vendor spend summary"))
             elif name == "search_cloud_blob_contracts":
-                raw = await _ainvoke_tool(tool, query=user_text, top=5)
-                sections.append(_summarize_search_payload(raw, query=user_text))
+                raw = await _ainvoke_tool(tool, query=user_text, top=20)
+                sections.append(_summarize_search_payload(raw, query=user_text, limit=20))
             else:
                 raw = await _ainvoke_tool(tool)
                 sections.append(f"`{name}` result:\n{raw[:2000]}")

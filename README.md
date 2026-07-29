@@ -87,9 +87,23 @@ patches `pyodbc.connect`, `pandas.read_sql`, and `azure.search.documents.SearchC
 before the production tools run. Tool method bodies stay unchanged and still call
 normal SQL / Azure SDK paths.
 
+`USE_OFFLINE_MOCKS=true` (or `AZURE_OPENAI_FORCE_OFFLINE=true`) also switches the
+Cognitive Routing Agent to an offline MCP tool router so Streamlit works when
+Azure OpenAI is unreachable. If Azure OpenAI returns **403 Virtual Network /
+Firewall rules**, the agent automatically falls back to that offline router.
+
 ```bash
 cd mcp_server && USE_OFFLINE_MOCKS=true .venv/bin/python test_offline_mocks.py
 ```
+
+### Fixing Azure OpenAI 403 (production path)
+
+In Azure Portal → your OpenAI resource → **Networking**:
+
+1. Allow public network access from selected IPs (or disable the firewall for POC), and
+2. Allowlist this environment’s egress IPs (example observed): `52.43.50.137`, `44.229.36.33`
+
+Until that allowlist is updated, local chat uses the offline router automatically.
 
 ## Testing the Validation UI
 

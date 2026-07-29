@@ -21,8 +21,8 @@ val-copilot-workspace/
 
 ### Cognitive routing boundary (system prompt)
 
-1. **Relational / Financial** → Fabric SQL (`query_fabric_sql`)
-2. **Unstructured document context** → Azure AI Search (`search_azure_documents`)
+1. **Relational / Financial** → Fabric SQL (`get_expiring_contracts`, `get_vendor_spend_summary`)
+2. **Unstructured document context** → Azure AI Search (`search_cloud_blob_contracts`)
 3. **Operational memory / meta state** → Postgres PGVector (`uvx mcp-server-pgvector`)
 
 ## Setup
@@ -70,9 +70,26 @@ Client B spawns `uvx mcp-server-pgvector`.
 
 | Surface | Owner | Consumers must update when changed |
 | --- | --- | --- |
-| `query_fabric_sql`, `search_azure_documents`, `fabric_health_check` | `mcp_server/server.py` | `copilot_agent/agent.py` system prompt |
+| `get_expiring_contracts`, `get_vendor_spend_summary`, `search_cloud_blob_contracts`, `fabric_health_check` | `mcp_server/server.py` | `copilot_agent/agent.py` system prompt |
 | PGVector tools (external) | `uvx mcp-server-pgvector` | `copilot_agent/mcp_clients.py`, system prompt |
 | `POST /api/messages` | `copilot_agent/app.py` | `test_ui/app.py` (`COPILOT_MESSAGES_URL`) |
+
+## Offline staging mocks (`mcp_server`)
+
+Set in the root `.env`:
+
+```bash
+USE_OFFLINE_MOCKS=true
+```
+
+When enabled, `mcp_server/server.py` loads `mcp_server/test_fixtures.json` and
+patches `pyodbc.connect`, `pandas.read_sql`, and `azure.search.documents.SearchClient`
+before the production tools run. Tool method bodies stay unchanged and still call
+normal SQL / Azure SDK paths.
+
+```bash
+cd mcp_server && USE_OFFLINE_MOCKS=true .venv/bin/python test_offline_mocks.py
+```
 
 ## Testing the Validation UI
 

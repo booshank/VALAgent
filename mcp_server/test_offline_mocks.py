@@ -48,6 +48,12 @@ compared = json.loads(
 assert compared.get("difference_count", 0) > 0, compared
 assert compared.get("left_contract_id") == "CON-0001"
 
+multi = json.loads(
+    server.compare_contracts(contract_refs="CON-0001,CON-0002,CON-0004")
+)
+assert multi.get("contract_count") == 3 or len(multi.get("contracts") or []) == 3, multi
+assert multi.get("field_matrix"), multi
+
 by_supplier = json.loads(
     server.compare_contracts(supplier_name_a="Microsoft", supplier_name_b="Oracle")
 )

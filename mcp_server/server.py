@@ -129,6 +129,7 @@ from contract_analytics import (  # noqa: E402
     build_criteria,
     check_missing_fields_in_rows,
     compare_contract_rows,
+    compare_many_contract_rows,
     filter_contracts,
     resolve_contract,
 )
@@ -372,8 +373,87 @@ def get_vendor_spend_summary(
     return json.dumps(_rows_payload(rows, criteria=criteria), default=str)
 
 
+def _split_csv(value: str | None) -> list[str]:
+    if not value:
+        return []
+    return [part.strip() for part in str(value).split(",") if part.strip()]
+
+
+def _build_side_criteria_list(
+    *,
+    contract_refs: str | None = None,
+    supplier_names: str | None = None,
+    contract_names: str | None = None,
+    contract_types: str | None = None,
+    annual_costs: str | None = None,
+    contract_ref_a: str | None = None,
+    contract_ref_b: str | None = None,
+    supplier_name_a: str | None = None,
+    supplier_name_b: str | None = None,
+    contract_name_a: str | None = None,
+    contract_name_b: str | None = None,
+    contract_type_a: str | None = None,
+    contract_type_b: str | None = None,
+    annual_cost_a: float | None = None,
+    annual_cost_b: float | None = None,
+) -> list[dict[str, Any]]:
+    """
+    Build 2..N lookup criteria.
+
+    Prefer explicit multi CSV lists when provided; otherwise fall back to legacy
+    pairwise *_a / *_b arguments.
+    """
+    refs = _split_csv(contract_refs)
+    suppliers = _split_csv(supplier_names)
+    names = _split_csv(contract_names)
+    types = _split_csv(contract_types)
+    costs_raw = _split_csv(annual_costs)
+    costs: list[float] = []
+    for item in costs_raw:
+        try:
+            costs.append(float(item.replace(",", "").replace("$", "")))
+        except ValueError:
+            continue
+
+    multi_len = max(len(refs), len(suppliers), len(names), len(types), len(costs), 0)
+    sides: list[dict[str, Any]] = []
+    if multi_len >= 2:
+        for idx in range(multi_len):
+            side = build_criteria(
+                contract_ref=refs[idx] if idx < len(refs) else None,
+                supplier_name=suppliers[idx] if idx < len(suppliers) else None,
+                contract_name=names[idx] if idx < len(names) else None,
+                contract_type=types[idx] if idx < len(types) else None,
+                annual_cost=costs[idx] if idx < len(costs) else None,
+            )
+            if side:
+                sides.append(side)
+        return sides
+
+    left = build_criteria(
+        contract_ref=contract_ref_a,
+        supplier_name=supplier_name_a,
+        contract_name=contract_name_a,
+        contract_type=contract_type_a,
+        annual_cost=annual_cost_a,
+    )
+    right = build_criteria(
+        contract_ref=contract_ref_b,
+        supplier_name=supplier_name_b,
+        contract_name=contract_name_b,
+        contract_type=contract_type_b,
+        annual_cost=annual_cost_b,
+    )
+    return [side for side in (left, right) if side]
+
+
 @mcp.tool()
 def compare_contracts(
+    contract_refs: str | None = None,
+    supplier_names: str | None = None,
+    contract_names: str | None = None,
+    contract_types: str | None = None,
+    annual_costs: str | None = None,
     contract_ref_a: str | None = None,
     contract_ref_b: str | None = None,
     supplier_name_a: str | None = None,
@@ -386,71 +466,96 @@ def compare_contracts(
     annual_cost_b: float | None = None,
 ) -> str:
     """
-    Compare two vendor contracts field-by-field from the Fabric Gold layer.
+    Compare two or more vendor contracts field-by-field from the Fabric Gold layer.
 
-    Resolve each side with the shared lookup dimensions: ContractID/Number,
-    SupplierName, ContractName, ContractType, and/or AnnualContractValue.
+    Prefer multi-contract CSV inputs (`contract_refs`, `supplier_names`, etc.) for
+    N-way comparison. Legacy pairwise `*_a` / `*_b` arguments remain supported.
+
+    Shared lookup dimensions: ContractID/Number, SupplierName, ContractName,
+    ContractType, and/or AnnualContractValue.
 
     Args:
-        contract_ref_a: Left ContractID or ContractNumber.
-        contract_ref_b: Right ContractID or ContractNumber.
-        supplier_name_a: Left supplier name (e.g. Microsoft).
-        supplier_name_b: Right supplier name (e.g. Oracle).
-        contract_name_a: Left contract name fragment.
-        contract_name_b: Right contract name fragment.
-        contract_type_a: Left contract type.
-        contract_type_b: Right contract type.
-        annual_cost_a: Left annual contract value.
-        annual_cost_b: Right annual contract value.
+        contract_refs: Comma-separated ContractIDs/Numbers (2+), e.g. CON-0001,CON-0002,CON-0003.
+        supplier_names: Comma-separated supplier names for N-way compare.
+        contract_names: Comma-separated contract names for N-way compare.
+        contract_types: Comma-separated contract types for N-way compare.
+        annual_costs: Comma-separated annual costs for N-way compare.
+        contract_ref_a: Legacy left ContractID or ContractNumber.
+        contract_ref_b: Legacy right ContractID or ContractNumber.
+        supplier_name_a: Legacy left supplier name.
+        supplier_name_b: Legacy right supplier name.
+        contract_name_a: Legacy left contract name fragment.
+        contract_name_b: Legacy right contract name fragment.
+        contract_type_a: Legacy left contract type.
+        contract_type_b: Legacy right contract type.
+        annual_cost_a: Legacy left annual contract value.
+        annual_cost_b: Legacy right annual contract value.
 
     Returns:
-        JSON string with matching fields and a differences list.
+        JSON string with N-way field matrix (and pairwise compatibility fields when N=2).
     """
     rows = _load_vendor_contracts(max_rows=500)
-    left_criteria = build_criteria(
-        contract_ref=contract_ref_a,
-        supplier_name=supplier_name_a,
-        contract_name=contract_name_a,
-        contract_type=contract_type_a,
-        annual_cost=annual_cost_a,
+    side_criteria = _build_side_criteria_list(
+        contract_refs=contract_refs,
+        supplier_names=supplier_names,
+        contract_names=contract_names,
+        contract_types=contract_types,
+        annual_costs=annual_costs,
+        contract_ref_a=contract_ref_a,
+        contract_ref_b=contract_ref_b,
+        supplier_name_a=supplier_name_a,
+        supplier_name_b=supplier_name_b,
+        contract_name_a=contract_name_a,
+        contract_name_b=contract_name_b,
+        contract_type_a=contract_type_a,
+        contract_type_b=contract_type_b,
+        annual_cost_a=annual_cost_a,
+        annual_cost_b=annual_cost_b,
     )
-    right_criteria = build_criteria(
-        contract_ref=contract_ref_b,
-        supplier_name=supplier_name_b,
-        contract_name=contract_name_b,
-        contract_type=contract_type_b,
-        annual_cost=annual_cost_b,
-    )
-    if not left_criteria or not right_criteria:
+    if len(side_criteria) < 2:
         return json.dumps(
             {
-                "error": "Both sides require at least one lookup criterion",
-                "left_criteria": left_criteria,
-                "right_criteria": right_criteria,
+                "error": "Provide at least two contract lookup sides for comparison",
+                "side_criteria": side_criteria,
             },
             default=str,
         )
 
-    left, left_err = _resolve_or_error(rows, left_criteria, side_label="left")
-    right, right_err = _resolve_or_error(rows, right_criteria, side_label="right")
-    if left_err or right_err:
+    resolved_rows: list[dict[str, Any]] = []
+    resolved_meta: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    for idx, criteria in enumerate(side_criteria):
+        contract, err = _resolve_or_error(rows, criteria, side_label=f"side_{idx+1}")
+        if err or contract is None:
+            errors.append(err or {"error": f"side_{idx+1} unresolved", "criteria": criteria})
+            continue
+        resolved_rows.append(contract)
+        resolved_meta.append({"side": f"side_{idx+1}", "criteria": criteria, "ContractID": contract.get("ContractID")})
+
+    if len(resolved_rows) < 2:
         return json.dumps(
             {
-                "error": "One or both contracts could not be uniquely resolved",
-                "left": left_err or {"resolved": left.get("ContractID") if left else None},
-                "right": right_err or {"resolved": right.get("ContractID") if right else None},
+                "error": "Could not resolve at least two contracts for comparison",
+                "resolved": resolved_meta,
+                "errors": errors,
             },
             default=str,
         )
-    assert left is not None and right is not None
-    result = compare_contract_rows(
-        left,
-        right,
-        left_id=str(left.get("ContractID") or "left"),
-        right_id=str(right.get("ContractID") or "right"),
-    )
-    result["left_criteria"] = left_criteria
-    result["right_criteria"] = right_criteria
+
+    if len(resolved_rows) == 2:
+        result = compare_contract_rows(
+            resolved_rows[0],
+            resolved_rows[1],
+            left_id=str(resolved_rows[0].get("ContractID") or "left"),
+            right_id=str(resolved_rows[1].get("ContractID") or "right"),
+        )
+    else:
+        result = compare_many_contract_rows(resolved_rows)
+
+    result["side_criteria"] = side_criteria
+    result["resolved"] = resolved_meta
+    if errors:
+        result["resolution_warnings"] = errors
     return json.dumps(result, default=str)
 
 

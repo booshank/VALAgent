@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
@@ -298,32 +299,29 @@ def compare_contract_rows(
     right_id: str,
 ) -> dict[str, Any]:
     """Field-level diff between two contract dictionaries."""
-    keys = sorted(set(left.keys()) | set(right.keys()))
-    ordered: list[str] = []
-    for key in COMPARE_PRIORITY_FIELDS:
-        if key in keys:
-            ordered.append(key)
-    ordered.extend(key for key in keys if key not in ordered)
-
+    multi = compare_many_contract_rows([left, right])
+    left_cid = str(left.get("ContractID") or left_id)
+    right_cid = str(right.get("ContractID") or right_id)
     differences: list[dict[str, Any]] = []
     matching: list[str] = []
-    for key in ordered:
-        lv = left.get(key)
-        rv = right.get(key)
-        if lv == rv:
-            matching.append(key)
+    for row in multi.get("field_matrix") or []:
+        field = row.get("field")
+        values = row.get("values") or {}
+        if row.get("all_match"):
+            matching.append(str(field))
         else:
             differences.append(
                 {
-                    "field": key,
-                    left_id: lv,
-                    right_id: rv,
+                    "field": field,
+                    left_cid: values.get(left_cid),
+                    right_cid: values.get(right_cid),
                 }
             )
-
+    overview = {item["ContractID"]: item for item in multi.get("contracts") or []}
     return {
-        "left_contract_id": left.get("ContractID") or left_id,
-        "right_contract_id": right.get("ContractID") or right_id,
+        "mode": "pairwise",
+        "left_contract_id": left_cid,
+        "right_contract_id": right_cid,
         "left_contract_number": left.get("ContractNumber"),
         "right_contract_number": right.get("ContractNumber"),
         "left_supplier_name": left.get("SupplierName"),
@@ -334,11 +332,90 @@ def compare_contract_rows(
         "right_contract_type": right.get("ContractType"),
         "left_annual_cost": left.get("AnnualContractValue"),
         "right_annual_cost": right.get("AnnualContractValue"),
-        "fields_compared": len(ordered),
+        "fields_compared": multi.get("fields_compared"),
         "matching_field_count": len(matching),
         "difference_count": len(differences),
         "differences": differences,
         "matching_fields": matching,
+        "contracts": multi.get("contracts"),
+        "field_matrix": multi.get("field_matrix"),
+        "overview": overview,
+    }
+
+
+def compare_many_contract_rows(contracts: list[dict[str, Any]]) -> dict[str, Any]:
+    """
+    N-way field comparison across 2+ contracts.
+
+    Returns an overview per contract plus a field matrix with per-contract values.
+    """
+    if len(contracts) < 2:
+        raise ValueError("compare_many_contract_rows requires at least 2 contracts")
+
+    labeled: list[tuple[str, dict[str, Any]]] = []
+    seen: set[str] = set()
+    for idx, row in enumerate(contracts):
+        cid = str(row.get("ContractID") or row.get("ContractNumber") or f"contract_{idx+1}")
+        if cid in seen:
+            cid = f"{cid}#{idx+1}"
+        seen.add(cid)
+        labeled.append((cid, row))
+
+    keys = sorted(set().union(*(row.keys() for _, row in labeled)))
+    ordered: list[str] = []
+    for key in COMPARE_PRIORITY_FIELDS:
+        if key in keys:
+            ordered.append(key)
+    ordered.extend(key for key in keys if key not in ordered)
+
+    field_matrix: list[dict[str, Any]] = []
+    matching_fields: list[str] = []
+    differing_fields: list[str] = []
+    for key in ordered:
+        values = {cid: row.get(key) for cid, row in labeled}
+        normalized = [json.dumps(value, default=str, sort_keys=True) for value in values.values()]
+        all_match = len(set(normalized)) == 1
+        entry = {
+            "field": key,
+            "values": values,
+            "all_match": all_match,
+        }
+        field_matrix.append(entry)
+        if all_match:
+            matching_fields.append(key)
+        else:
+            differing_fields.append(key)
+
+    overview = []
+    for cid, row in labeled:
+        overview.append(
+            {
+                "ContractID": cid,
+                "ContractNumber": row.get("ContractNumber"),
+                "ContractName": row.get("ContractName"),
+                "ContractType": row.get("ContractType"),
+                "SupplierName": row.get("SupplierName"),
+                "ContractStatus": row.get("ContractStatus"),
+                "ContractValue": row.get("ContractValue"),
+                "AnnualContractValue": row.get("AnnualContractValue"),
+                "Currency": row.get("Currency"),
+                "EffectiveDate": row.get("EffectiveDate"),
+                "ExpirationDate": row.get("ExpirationDate"),
+                "AutoRenewalFlag": row.get("AutoRenewalFlag"),
+            }
+        )
+
+    return {
+        "mode": "multi",
+        "contract_count": len(labeled),
+        "contract_ids": [cid for cid, _ in labeled],
+        "contracts": overview,
+        "fields_compared": len(ordered),
+        "matching_field_count": len(matching_fields),
+        "difference_count": len(differing_fields),
+        "matching_fields": matching_fields,
+        "differing_fields": differing_fields,
+        "field_matrix": field_matrix,
     }
 
 

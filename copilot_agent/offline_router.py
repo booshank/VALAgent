@@ -233,6 +233,13 @@ def _extract_annual_costs(text: str) -> list[float]:
             values.append(float(match.group(1).replace(",", "")))
         except ValueError:
             continue
+    # Compare prompts often use bare amounts: "compare annual cost 41666.67 vs 50000"
+    if not values and re.search(r"\b(annual|cost|acv|value)\b", text, re.I):
+        for match in re.finditer(r"\b(\d{4,}(?:\.\d+)?)\b", text):
+            try:
+                values.append(float(match.group(1).replace(",", "")))
+            except ValueError:
+                continue
     return list(dict.fromkeys(values))
 
 

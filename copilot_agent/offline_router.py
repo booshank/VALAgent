@@ -36,7 +36,16 @@ _COMPARE_RE = re.compile(
     re.I,
 )
 _MISSING_RE = re.compile(
-    r"\b(missing|incomplete|blank|null|data\s*quality|completeness|required\s*field)\b",
+    r"\b(missing|incomplete|blank|null|data\s*quality|completeness|required\s*field|"
+    r"red[\s-]?flag|compliance|audit|indemnif\w*|liabilit\w*|sla)\b",
+    re.I,
+)
+_EXPOSURE_RE = re.compile(
+    r"\b(exposure|penalty|penalties|financial\s*risk|what\s*if|breach|damages)\b",
+    re.I,
+)
+_RENEWAL_RE = re.compile(
+    r"\b(renew\w*|renegotiat\w*|terminat\w*|auto[\s-]?renew|strategy\s*sheet)\b",
     re.I,
 )
 _CONTRACT_ID_RE = re.compile(r"\b(?:CON|CNT)-\d+\b", re.I)
@@ -599,6 +608,203 @@ def _split_compare_sides(text: str) -> tuple[str, str] | None:
     return None
 
 
+def _lifecycle_red_flag_audit(missing_raw: str, search_raw: str | None = None) -> str:
+    findings: list[str] = []
+    try:
+        missing = json.loads(missing_raw)
+    except json.JSONDecodeError:
+        missing = {}
+    for row in (missing.get("incomplete_contracts") or [])[:8]:
+        gaps = ", ".join(row.get("missing_fields") or []) or "unspecified gaps"
+        findings.append(
+            f"| High | {row.get('ContractID')} / {row.get('SupplierName')} | "
+            f"Missing required commercial fields: {gaps} | Fabric SQL |"
+        )
+    clause_hits = 0
+    if search_raw:
+        try:
+            search = json.loads(search_raw)
+            docs = search.get("documents") or []
+            clause_hits = len(docs)
+            if clause_hits == 0:
+                findings.append(
+                    "| High | Clause corpus | No liability/indemnification/SLA snippets returned | Azure AI Search |"
+                )
+            else:
+                findings.append(
+                    f"| Medium | Clause corpus | {clause_hits} document hits for liability/SLA language — review for one-sided indemnification or weak SLAs | Azure AI Search |"
+                )
+        except json.JSONDecodeError:
+            findings.append(
+                "| Medium | Clause corpus | Search payload unreadable; treat legal risk as unverified | Azure AI Search |"
+            )
+
+    if not findings:
+        findings.append(
+            "| Low | Scan | No incomplete-field or clause gaps detected in current tool output | Orchestrator |"
+        )
+
+    counter_lines = [
+        "",
+        "## Dynamic Counter-Clause Drafting",
+        "",
+        "Proposed fallback language (draft — Legal review required):",
+        "",
+        "1. **Limitation of Liability** — Cap each party's aggregate liability at 12 months of fees "
+        "paid under the agreement, excluding fraud, gross negligence, IP infringement, and "
+        "confidentiality breaches.",
+        "2. **Mutual Indemnification** — Each party indemnifies the other for third-party claims "
+        "arising from its negligence, willful misconduct, or violation of law; vendor additionally "
+        "indemnifies for IP infringement claims tied to delivered services.",
+        "3. **SLA Credits** — Define measurable uptime (≥99.9%) with service credits up to 10% of "
+        "monthly fees; credits are the exclusive remedy for SLA failure unless chronic breach.",
+        "4. **Termination for Convenience** — Allow customer termination with 30 days' notice and "
+        "payment only for services rendered through the effective termination date.",
+        "",
+        "Action: route High findings to Legal within 5 business days; do not execute renewals until "
+        "fallback language is negotiated or risk is formally accepted.",
+    ]
+
+    return "\n".join(
+        [
+            "## Red-Flag Compliance Audit",
+            "",
+            "| Severity | Subject | Finding | Source |",
+            "| --- | --- | --- | --- |",
+            *findings,
+            "",
+            "Actionable next steps:",
+            "- Quarantine High-severity agreements from auto-renew until Legal signs off.",
+            "- Open a vendor remediation ticket for each missing liability/SLA control.",
+            "- Re-scan with `search_cloud_blob_contracts` after amendment upload.",
+            *counter_lines,
+        ]
+    )
+
+
+def _lifecycle_financial_exposure(
+    spend_raw: str | None,
+    expiring_raw: str | None = None,
+    search_note: str | None = None,
+) -> str:
+    annual = None
+    supplier = None
+    try:
+        spend = json.loads(spend_raw or "{}")
+        rows = spend.get("rows") or []
+        if rows:
+            annual = rows[0].get("TotalAnnualContractValue") or rows[0].get("AnnualContractValue")
+            supplier = rows[0].get("SupplierName")
+    except json.JSONDecodeError:
+        spend = {}
+
+    remaining_years = 1.0
+    try:
+        expiring = json.loads(expiring_raw or "{}")
+        erows = expiring.get("rows") or []
+        if erows and erows[0].get("ExpirationDate") and erows[0].get("EffectiveDate"):
+            life = _lifecycle_days(erows[0].get("EffectiveDate"), erows[0].get("ExpirationDate"))
+            if life and life > 0:
+                remaining_years = max(life / 365.0, 0.25)
+    except Exception:  # noqa: BLE001
+        pass
+
+    annual_n = _as_number(annual) or 0.0
+    low = annual_n * 0.1 * remaining_years
+    base = annual_n * 0.25 * remaining_years
+    high = annual_n * 1.0 * remaining_years
+    label = supplier or "selected vendor"
+    assumptions = [
+        f"Baseline annual commercial value ≈ {annual_n} for {label} (Fabric SQL).",
+        f"Modeled remaining exposure window ≈ {remaining_years:.2f} years from effective/expiration signals.",
+        "Low/base/high use 10%/25%/100% of annualized value as proxy multipliers when penalty caps are unclear.",
+    ]
+    if search_note:
+        assumptions.append(search_note)
+
+    return "\n".join(
+        [
+            "## Financial Exposure Projection",
+            "",
+            f"| Scenario | Estimated exposure ({label}) |",
+            "| --- | --- |",
+            f"| Low | {low:,.2f} |",
+            f"| Base | {base:,.2f} |",
+            f"| High | {high:,.2f} |",
+            "",
+            "Assumptions:",
+            *[f"- {item}" for item in assumptions],
+            "",
+            "Actionable cost-control recommendations:",
+            "- Negotiate an explicit liability cap tied to 12 months of fees before renewal.",
+            "- Require amendment of uncapped indemnities; otherwise escalate for risk acceptance.",
+            "- If High scenario exceeds internal risk appetite, pause auto-renew and rebid scope.",
+        ]
+    )
+
+
+def _lifecycle_renewal_strategy(expiring_raw: str, spend_raw: str | None = None) -> str:
+    try:
+        expiring = json.loads(expiring_raw)
+    except json.JSONDecodeError:
+        expiring = {}
+    rows = expiring.get("rows") or []
+    spend_by_supplier: dict[str, float] = {}
+    try:
+        spend = json.loads(spend_raw or "{}")
+        for row in spend.get("rows") or []:
+            name = str(row.get("SupplierName") or "")
+            spend_by_supplier[name.lower()] = float(
+                row.get("TotalAnnualContractValue")
+                or row.get("AnnualContractValue")
+                or 0
+            )
+    except Exception:  # noqa: BLE001
+        pass
+
+    lines = [
+        "## Proactive Renewal Strategy Sheet",
+        "",
+        "| Contract | Supplier | Expiry | Spend signal | Recommended action |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    checklist: list[str] = []
+    for row in rows[:10]:
+        supplier = str(row.get("SupplierName") or "Unknown")
+        cid = str(row.get("ContractID") or "—")
+        expiry = str(row.get("ExpirationDate") or "—")
+        annual = _as_number(row.get("AnnualContractValue")) or spend_by_supplier.get(supplier.lower())
+        status = str(row.get("ContractStatus") or "").lower()
+        auto = row.get("AutoRenewalFlag")
+        spend_signal = f"{annual}" if annual is not None else "n/a"
+        if status in {"expired", "terminated"}:
+            action = "Terminate / transition"
+        elif auto is True and (annual or 0) >= 100000:
+            action = "Renegotiate pricing caps + liability"
+        elif auto is True:
+            action = "Auto-renew with SLA/liability review"
+        else:
+            action = "Renegotiate before term end"
+        lines.append(
+            f"| {cid} | {supplier} | {expiry} | {spend_signal} | {action} |"
+        )
+        checklist.append(f"{cid}: execute `{action}` and confirm notice-period compliance.")
+
+    if not rows:
+        lines.append("| — | — | — | — | No expiring rows returned |")
+
+    lines.extend(
+        [
+            "",
+            "Procurement execution checklist:",
+            *[f"- {item}" for item in checklist[:8]],
+            "- Confirm auto-renew notice dates and freeze PO increases pending decision.",
+            "- Attach Red-Flag Compliance Audit output to the renewal packet.",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def _choose_tools(user_text: str) -> list[str]:
     text = user_text.strip()
     chosen: list[str] = []
@@ -606,10 +812,15 @@ def _choose_tools(user_text: str) -> list[str]:
         chosen.append("compare_contracts")
     if _MISSING_RE.search(text):
         chosen.append("check_missing_contract_fields")
-    if _EXPIRE_RE.search(text):
+        chosen.append("search_cloud_blob_contracts")
+    if _EXPIRE_RE.search(text) or _RENEWAL_RE.search(text):
         chosen.append("get_expiring_contracts")
-    if _SPEND_RE.search(text):
         chosen.append("get_vendor_spend_summary")
+    if _SPEND_RE.search(text) or _EXPOSURE_RE.search(text):
+        chosen.append("get_vendor_spend_summary")
+    if _EXPOSURE_RE.search(text):
+        chosen.append("search_cloud_blob_contracts")
+        chosen.append("get_expiring_contracts")
     if _SEARCH_RE.search(text) or (
         "contract" in text.lower()
         and "compare_contracts" not in chosen
@@ -654,6 +865,19 @@ async def run_offline_turn(user_text: str) -> str:
                     **shared_filters,
                 )
                 sections.append(_summarize_sql_payload(raw, title="Expiring contracts"))
+                spend_raw = None
+                spend_tool = tools.get("get_vendor_spend_summary")
+                if spend_tool:
+                    spend_filters = {
+                        key: shared_filters[key]
+                        for key in ("supplier_name", "contract_type", "annual_cost")
+                        if key in shared_filters
+                    }
+                    spend_raw = await _ainvoke_tool(spend_tool, max_rows=25, **spend_filters)
+                if _EXPIRE_RE.search(user_text) or _RENEWAL_RE.search(user_text):
+                    sections.append(_lifecycle_renewal_strategy(raw, spend_raw))
+                if _EXPOSURE_RE.search(user_text):
+                    sections.append(_lifecycle_financial_exposure(spend_raw, raw))
             elif name == "get_vendor_spend_summary":
                 spend_filters = {
                     key: shared_filters[key]
@@ -662,6 +886,10 @@ async def run_offline_turn(user_text: str) -> str:
                 }
                 raw = await _ainvoke_tool(tool, max_rows=25, **spend_filters)
                 sections.append(_summarize_sql_payload(raw, title="Vendor spend summary"))
+                if _EXPOSURE_RE.search(user_text) and "Financial Exposure Projection" not in "\n".join(
+                    sections
+                ):
+                    sections.append(_lifecycle_financial_exposure(raw, None))
             elif name == "compare_contracts":
                 compare_kwargs: dict[str, Any] = {}
                 if len(contract_ids) >= 2:
@@ -788,7 +1016,59 @@ async def run_offline_turn(user_text: str) -> str:
             elif name == "check_missing_contract_fields":
                 raw = await _ainvoke_tool(tool, max_rows=100, **shared_filters)
                 sections.append(_summarize_missing_payload(raw))
+                search_raw = None
+                search_tool = tools.get("search_cloud_blob_contracts")
+                if search_tool and "search_cloud_blob_contracts" in selected:
+                    # Prefer the search result already scheduled later; fetch now for audit.
+                    audit_query = (
+                        "liability limitation indemnification SLA service level "
+                        "termination notice"
+                    )
+                    if contract_ids:
+                        audit_query = f"{contract_ids[0]} {audit_query}"
+                    elif suppliers:
+                        audit_query = f"{suppliers[0]} {audit_query}"
+                    search_raw = await _ainvoke_tool(
+                        search_tool,
+                        query=audit_query,
+                        top=20,
+                        **shared_filters,
+                    )
+                if _MISSING_RE.search(user_text):
+                    sections.append(_lifecycle_red_flag_audit(raw, search_raw))
+                if _EXPOSURE_RE.search(user_text):
+                    spend_tool = tools.get("get_vendor_spend_summary")
+                    spend_raw = None
+                    if spend_tool:
+                        spend_filters = {
+                            key: shared_filters[key]
+                            for key in ("supplier_name", "contract_type", "annual_cost")
+                            if key in shared_filters
+                        }
+                        spend_raw = await _ainvoke_tool(
+                            spend_tool, max_rows=25, **spend_filters
+                        )
+                    if "Financial Exposure Projection" not in "\n".join(sections):
+                        sections.append(
+                            _lifecycle_financial_exposure(
+                                spend_raw,
+                                None,
+                                search_note=(
+                                    "Clause gaps from compliance audit increase modeled "
+                                    "exposure when liability caps are absent."
+                                ),
+                            )
+                        )
             elif name == "search_cloud_blob_contracts":
+                # Skip duplicate search when missing-field audit already fetched clauses.
+                if (
+                    "check_missing_contract_fields" in selected
+                    and _MISSING_RE.search(user_text)
+                    and any(
+                        "## Red-Flag Compliance Audit" in s for s in sections
+                    )
+                ):
+                    continue
                 raw = await _ainvoke_tool(
                     tool,
                     query=user_text,
@@ -796,6 +1076,14 @@ async def run_offline_turn(user_text: str) -> str:
                     **shared_filters,
                 )
                 sections.append(_summarize_search_payload(raw, query=user_text, limit=20))
+                if _MISSING_RE.search(user_text) and not any(
+                    "## Red-Flag Compliance Audit" in s for s in sections
+                ):
+                    # Clause-only audit path (no missing-field tool selected).
+                    empty_missing = json.dumps(
+                        {"incomplete_contracts": [], "checked_count": 0}
+                    )
+                    sections.append(_lifecycle_red_flag_audit(empty_missing, raw))
             else:
                 raw = await _ainvoke_tool(tool)
                 sections.append(f"`{name}` result:\n{raw[:2000]}")

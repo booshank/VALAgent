@@ -31,6 +31,15 @@ _SEARCH_RE = re.compile(
     r"\b(legal|liabilit\w*|clause|pdf|document|policy|blob|unstructured|search|contract\s*text)\b",
     re.I,
 )
+_COMPARE_RE = re.compile(
+    r"\b(compar\w*|diff(?:erence|s)?|versus|vs\.?)\b",
+    re.I,
+)
+_MISSING_RE = re.compile(
+    r"\b(missing|incomplete|blank|null|data\s*quality|completeness|required\s*field)\b",
+    re.I,
+)
+_CONTRACT_ID_RE = re.compile(r"\b(?:CON|CNT)-\d+\b", re.I)
 
 
 def _tool_map(tools: list[BaseTool]) -> dict[str, BaseTool]:
@@ -63,15 +72,12 @@ def _summarize_sql_payload(raw: str, *, title: str, limit: int = 5) -> str:
     if isinstance(payload, list):
         rows = payload
         count = len(rows)
-        columns: list[str] = list(rows[0].keys()) if rows and isinstance(rows[0], dict) else []
     elif isinstance(payload, dict):
         rows = payload.get("rows") or []
         count = payload.get("row_count", len(rows))
-        columns = payload.get("columns") or []
     else:
         return f"{title}\n{raw[:2000]}"
 
-    del columns
     lines = [f"{title} ({count} rows)"]
     for row in rows[:limit]:
         if not isinstance(row, dict):
@@ -90,7 +96,7 @@ def _summarize_sql_payload(raw: str, *, title: str, limit: int = 5) -> str:
     return "\n".join(lines)
 
 
-def _summarize_search_payload(raw: str, *, query: str, limit: int = 3) -> str:
+def _summarize_search_payload(raw: str, *, query: str, limit: int = 20) -> str:
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError:
@@ -110,19 +116,93 @@ def _summarize_search_payload(raw: str, *, query: str, limit: int = 3) -> str:
     return "\n".join(lines)
 
 
+def _summarize_compare_payload(raw: str, limit: int = 20) -> str:
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return f"Contract comparison:\n{raw[:2000]}"
+
+    if payload.get("error"):
+        return (
+            f"Contract comparison failed: {payload.get('error')} "
+            f"(A found={payload.get('found_a')}, B found={payload.get('found_b')})"
+        )
+
+    diffs = payload.get("differences") or []
+    left_id = payload.get("left_contract_id")
+    right_id = payload.get("right_contract_id")
+    lines = [
+        f"Contract comparison: {left_id} vs {right_id}",
+        f"Fields compared: {payload.get('fields_compared')}; "
+        f"matching: {payload.get('matching_field_count')}; "
+        f"differences: {payload.get('difference_count')}",
+    ]
+    for item in diffs[:limit]:
+        field = item.get("field")
+        lines.append(
+            f"- {field}: {item.get(str(left_id))} → {item.get(str(right_id))}"
+        )
+    if len(diffs) > limit:
+        lines.append(f"... {len(diffs) - limit} more differences omitted")
+    lines.append("Source: Fabric SQL Gold (MCP compare_contracts)")
+    return "\n".join(lines)
+
+
+def _summarize_missing_payload(raw: str, limit: int = 20) -> str:
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return f"Missing-field check:\n{raw[:2000]}"
+
+    if payload.get("not_found"):
+        return f"No contract found for ref `{payload.get('contract_ref')}`."
+
+    incomplete = payload.get("incomplete_contracts") or []
+    lines = [
+        "Missing contract information check",
+        f"Evaluated: {payload.get('contracts_evaluated')}; "
+        f"complete: {payload.get('complete_count')}; "
+        f"incomplete: {payload.get('incomplete_count')}",
+        "Required fields: " + ", ".join(payload.get("required_fields") or []),
+    ]
+    for row in incomplete[:limit]:
+        lines.append(
+            f"- {row.get('ContractID')} ({row.get('ContractName')}): "
+            f"missing {', '.join(row.get('missing_fields') or [])}"
+        )
+    if len(incomplete) > limit:
+        lines.append(f"... {len(incomplete) - limit} more incomplete contracts omitted")
+    if not incomplete:
+        lines.append("All evaluated contracts have the required fields populated.")
+    lines.append("Source: Fabric SQL Gold (MCP check_missing_contract_fields)")
+    return "\n".join(lines)
+
+
+def _extract_contract_ids(text: str) -> list[str]:
+    return list(dict.fromkeys(_CONTRACT_ID_RE.findall(text)))
+
+
 def _choose_tools(user_text: str) -> list[str]:
     text = user_text.strip()
     chosen: list[str] = []
+    if _COMPARE_RE.search(text):
+        chosen.append("compare_contracts")
+    if _MISSING_RE.search(text):
+        chosen.append("check_missing_contract_fields")
     if _EXPIRE_RE.search(text):
         chosen.append("get_expiring_contracts")
     if _SPEND_RE.search(text):
         chosen.append("get_vendor_spend_summary")
-    if _SEARCH_RE.search(text) or "contract" in text.lower():
+    # Avoid generic document search when the user clearly asked for compare/missing analytics.
+    if _SEARCH_RE.search(text) or (
+        "contract" in text.lower()
+        and "compare_contracts" not in chosen
+        and "check_missing_contract_fields" not in chosen
+        and "get_expiring_contracts" not in chosen
+    ):
         chosen.append("search_cloud_blob_contracts")
     if not chosen:
-        # Default staging path: financial rollup + light document search.
         chosen = ["get_vendor_spend_summary", "search_cloud_blob_contracts"]
-    # Preserve order, drop dupes.
     return list(dict.fromkeys(chosen))
 
 
@@ -130,6 +210,7 @@ async def run_offline_turn(user_text: str) -> str:
     """Intent-route to MCP tools without calling Azure OpenAI."""
     tools = _tool_map(await bridge.get_tools())
     selected = _choose_tools(user_text)
+    contract_ids = _extract_contract_ids(user_text)
     sections: list[str] = []
 
     for name in selected:
@@ -144,9 +225,27 @@ async def run_offline_turn(user_text: str) -> str:
             elif name == "get_vendor_spend_summary":
                 raw = await _ainvoke_tool(tool, max_rows=25)
                 sections.append(_summarize_sql_payload(raw, title="Vendor spend summary"))
+            elif name == "compare_contracts":
+                if len(contract_ids) >= 2:
+                    a, b = contract_ids[0], contract_ids[1]
+                else:
+                    # Deterministic staging default when IDs are omitted.
+                    a, b = "CON-0001", "CON-0002"
+                    sections.append(
+                        "No two contract IDs detected in the prompt; "
+                        f"defaulting comparison to {a} vs {b}."
+                    )
+                raw = await _ainvoke_tool(tool, contract_id_a=a, contract_id_b=b)
+                sections.append(_summarize_compare_payload(raw))
+            elif name == "check_missing_contract_fields":
+                kwargs: dict[str, Any] = {"max_rows": 100}
+                if contract_ids:
+                    kwargs["contract_id"] = contract_ids[0]
+                raw = await _ainvoke_tool(tool, **kwargs)
+                sections.append(_summarize_missing_payload(raw))
             elif name == "search_cloud_blob_contracts":
-                raw = await _ainvoke_tool(tool, query=user_text, top=5)
-                sections.append(_summarize_search_payload(raw, query=user_text))
+                raw = await _ainvoke_tool(tool, query=user_text, top=20)
+                sections.append(_summarize_search_payload(raw, query=user_text, limit=20))
             else:
                 raw = await _ainvoke_tool(tool)
                 sections.append(f"`{name}` result:\n{raw[:2000]}")

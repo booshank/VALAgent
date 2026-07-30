@@ -42,7 +42,7 @@ def _serialize_results(results: Any, query: str, semantic_config: str) -> dict[s
 def hybrid_semantic_search(
     query: str,
     *,
-    top: int = 5,
+    top: int = 20,
     filter_expression: str | None = None,
     select: list[str] | None = None,
 ) -> dict[str, Any]:

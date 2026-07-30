@@ -42,6 +42,14 @@ assert search["query_type"] == "semantic"
 assert search["count"] > 0
 assert search["documents"]
 
+compared = json.loads(server.compare_contracts("CON-0001", "CON-0002"))
+assert compared.get("difference_count", 0) > 0, compared
+assert compared.get("left_contract_id") == "CON-0001"
+
+missing = json.loads(server.check_missing_contract_fields(max_rows=50))
+assert "incomplete_contracts" in missing
+assert missing["contracts_evaluated"] > 0
+
 health = json.loads(server.fabric_health_check())
 assert health["status"] == "ok", health
 
@@ -49,6 +57,8 @@ print("offline interceptor OK")
 print(f"  expiring_rows={expiring['row_count']}")
 print(f"  spend_rows={spend['row_count']}")
 print(f"  search_docs={search['count']}")
+print(f"  compare_diffs={compared['difference_count']}")
+print(f"  incomplete={missing['incomplete_count']}")
 """
     proc = subprocess.run(
         [sys.executable, "-c", script],
@@ -69,6 +79,8 @@ def test_production_tools_have_no_mock_branches() -> None:
     tool_markers = [
         "def get_expiring_contracts",
         "def get_vendor_spend_summary",
+        "def compare_contracts",
+        "def check_missing_contract_fields",
         "def search_cloud_blob_contracts",
     ]
     for marker in tool_markers:

@@ -35,11 +35,15 @@ Strict Cognitive Routing Boundary — choose tools by intent domain:
    → Use Fabric SQL tools from the fabric_data MCP server
      (`get_expiring_contracts`, `get_vendor_spend_summary`).
 
-2. Unstructured Deep Document Context (legal liabilities, contract language, raw PDF/text)
+2. Contract analytics (compare two contracts, find missing/incomplete fields)
+   → Use Fabric analytics tools from the fabric_data MCP server
+     (`compare_contracts`, `check_missing_contract_fields`).
+
+3. Unstructured Deep Document Context (legal liabilities, contract language, raw PDF/text)
    → Use Azure AI Search tools from the fabric_data MCP server
      (`search_cloud_blob_contracts`).
 
-3. Localized Meta State / Operational Memory (session notes, prior decisions, embeddings)
+4. Localized Meta State / Operational Memory (session notes, prior decisions, embeddings)
    → Use Postgres / PGVector tools from the pgvector MCP server.
 
 Rules:

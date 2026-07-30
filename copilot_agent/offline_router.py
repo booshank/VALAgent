@@ -145,7 +145,12 @@ def _summarize_search_payload(raw: str, *, query: str, limit: int = 20) -> str:
     return "\n".join(lines)
 
 
-def _summarize_compare_payload(raw: str, limit: int = 20) -> str:
+def _md_cell(value: Any) -> str:
+    text = "—" if value is None or value == "" else str(value)
+    return text.replace("|", "\\|").replace("\n", " ").strip()
+
+
+def _summarize_compare_payload(raw: str, limit: int = 50) -> str:
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError:
@@ -158,26 +163,58 @@ def _summarize_compare_payload(raw: str, limit: int = 20) -> str:
         )
 
     diffs = payload.get("differences") or []
+    matching = payload.get("matching_fields") or []
     left_id = payload.get("left_contract_id")
     right_id = payload.get("right_contract_id")
+    left_label = _md_cell(left_id)
+    right_label = _md_cell(right_id)
+
     lines = [
-        f"Contract comparison: {left_id} vs {right_id}",
-        f"Names: {payload.get('left_contract_name')} vs {payload.get('right_contract_name')}",
-        f"Suppliers: {payload.get('left_supplier_name')} vs {payload.get('right_supplier_name')}",
-        f"Types: {payload.get('left_contract_type')} vs {payload.get('right_contract_type')}",
-        f"Annual cost: {payload.get('left_annual_cost')} vs {payload.get('right_annual_cost')}",
-        f"Fields compared: {payload.get('fields_compared')}; "
-        f"matching: {payload.get('matching_field_count')}; "
-        f"differences: {payload.get('difference_count')}",
+        f"### Contract comparison: {left_label} vs {right_label}",
+        "",
+        "| Attribute | Left | Right |",
+        "| --- | --- | --- |",
+        f"| Contract ID | {left_label} | {right_label} |",
+        f"| Contract Number | {_md_cell(payload.get('left_contract_number'))} | {_md_cell(payload.get('right_contract_number'))} |",
+        f"| Contract Name | {_md_cell(payload.get('left_contract_name'))} | {_md_cell(payload.get('right_contract_name'))} |",
+        f"| Supplier | {_md_cell(payload.get('left_supplier_name'))} | {_md_cell(payload.get('right_supplier_name'))} |",
+        f"| Contract Type | {_md_cell(payload.get('left_contract_type'))} | {_md_cell(payload.get('right_contract_type'))} |",
+        f"| Annual Cost | {_md_cell(payload.get('left_annual_cost'))} | {_md_cell(payload.get('right_annual_cost'))} |",
+        f"| Fields compared | {payload.get('fields_compared')} | |",
+        f"| Matching fields | {payload.get('matching_field_count')} | |",
+        f"| Differences | {payload.get('difference_count')} | |",
+        "",
+        "#### Field differences",
+        "",
+        f"| Field | {left_label} | {right_label} |",
+        "| --- | --- | --- |",
     ]
     for item in diffs[:limit]:
-        field = item.get("field")
-        lines.append(
-            f"- {field}: {item.get(str(left_id))} → {item.get(str(right_id))}"
-        )
+        field = _md_cell(item.get("field"))
+        left_val = _md_cell(item.get(str(left_id)))
+        right_val = _md_cell(item.get(str(right_id)))
+        lines.append(f"| {field} | {left_val} | {right_val} |")
+    if not diffs:
+        lines.append("| — | No differences | No differences |")
     if len(diffs) > limit:
-        lines.append(f"... {len(diffs) - limit} more differences omitted")
-    lines.append("Source: Fabric SQL Gold (MCP compare_contracts)")
+        lines.append(f"| … | {len(diffs) - limit} more differences omitted | |")
+
+    if matching:
+        lines.extend(
+            [
+                "",
+                "#### Matching fields",
+                "",
+                "| Field | Status |",
+                "| --- | --- |",
+            ]
+        )
+        for field in matching[:limit]:
+            lines.append(f"| {_md_cell(field)} | Match |")
+        if len(matching) > limit:
+            lines.append(f"| … | {len(matching) - limit} more matching fields omitted |")
+
+    lines.extend(["", "Source: Fabric SQL Gold (MCP `compare_contracts`)"])
     return "\n".join(lines)
 
 

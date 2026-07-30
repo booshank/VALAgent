@@ -124,7 +124,47 @@ if _OFFLINE_MOCKS_ENABLED:
 # Import infrastructure modules AFTER optional patches so their bound drivers
 # resolve to the offline stand-ins when USE_OFFLINE_MOCKS is enabled.
 from azure_search import hybrid_semantic_search  # noqa: E402
+from contract_analytics import (  # noqa: E402
+    DEFAULT_REQUIRED_FIELDS,
+    check_missing_fields_in_rows,
+    compare_contract_rows,
+    find_contract_row,
+)
 from fabric_sql import execute_query  # noqa: E402
+
+
+def _load_vendor_contracts(max_rows: int = 500) -> list[dict[str, Any]]:
+    """Fetch Gold vendor contracts for analytics tools."""
+    sql = """
+        SELECT
+            ContractID,
+            ContractNumber,
+            ContractName,
+            ContractType,
+            AgreementType,
+            ContractStatus,
+            SupplierID,
+            SupplierName,
+            ContractValue,
+            AnnualContractValue,
+            Currency,
+            EffectiveDate,
+            ExpirationDate,
+            RenewalDate,
+            AutoRenewalFlag,
+            BusinessUnit,
+            ContractOwner,
+            ParentContractID,
+            ParentContractNumber,
+            ContractVersion,
+            SupplierRiskRating,
+            NoticePeriodDays,
+            ContractURL
+        FROM Gold_Vendor_Contracts
+    """
+    payload = execute_query(sql, max_rows=max_rows)
+    rows = payload.get("rows") or []
+    return [row for row in rows if isinstance(row, dict)]
 
 if _OFFLINE_MOCKS_ENABLED:
     # Avoid building a real Fabric ODBC connection string during offline staging.
@@ -220,6 +260,72 @@ def get_vendor_spend_summary(max_rows: int = 200) -> str:
         ORDER BY TotalContractValue DESC
     """
     result = execute_query(sql, max_rows=max_rows)
+    return json.dumps(result, default=str)
+
+
+@mcp.tool()
+def compare_contracts(contract_id_a: str, contract_id_b: str) -> str:
+    """
+    Compare two vendor contracts field-by-field from the Fabric Gold layer.
+
+    Use when the user asks to diff contracts, compare versions/parents/children,
+    or highlight commercial term differences between two ContractIDs / numbers.
+
+    Args:
+        contract_id_a: First ContractID or ContractNumber.
+        contract_id_b: Second ContractID or ContractNumber.
+
+    Returns:
+        JSON string with matching fields and a differences list.
+    """
+    rows = _load_vendor_contracts(max_rows=500)
+    left = find_contract_row(rows, contract_id_a)
+    right = find_contract_row(rows, contract_id_b)
+    if left is None or right is None:
+        return json.dumps(
+            {
+                "error": "One or both contracts were not found",
+                "contract_id_a": contract_id_a,
+                "contract_id_b": contract_id_b,
+                "found_a": left is not None,
+                "found_b": right is not None,
+            },
+            default=str,
+        )
+    result = compare_contract_rows(
+        left,
+        right,
+        left_id=str(left.get("ContractID") or contract_id_a),
+        right_id=str(right.get("ContractID") or contract_id_b),
+    )
+    return json.dumps(result, default=str)
+
+
+@mcp.tool()
+def check_missing_contract_fields(
+    contract_id: str | None = None,
+    max_rows: int = 200,
+) -> str:
+    """
+    Check vendor contracts for missing or blank required commercial fields.
+
+    Use for data-quality / completeness intents: incomplete contracts, missing
+    supplier, value, dates, owner, or other mandatory attributes.
+
+    Args:
+        contract_id: Optional ContractID or ContractNumber to check a single record.
+            When omitted, scans the Gold contract set (up to max_rows).
+        max_rows: Maximum contracts to evaluate in a bulk scan (default 200).
+
+    Returns:
+        JSON string with incomplete contracts and their missing_fields lists.
+    """
+    rows = _load_vendor_contracts(max_rows=max_rows)
+    result = check_missing_fields_in_rows(
+        rows,
+        required_fields=list(DEFAULT_REQUIRED_FIELDS),
+        contract_ref=contract_id,
+    )
     return json.dumps(result, default=str)
 
 

@@ -22,8 +22,9 @@ val-copilot-workspace/
 ### Cognitive routing boundary (system prompt)
 
 1. **Relational / Financial** → Fabric SQL (`get_expiring_contracts`, `get_vendor_spend_summary`)
-2. **Unstructured document context** → Azure AI Search (`search_cloud_blob_contracts`)
-3. **Operational memory / meta state** → Postgres PGVector (`uvx mcp-server-pgvector`)
+2. **Contract analytics** → Fabric SQL (`compare_contracts`, `check_missing_contract_fields`)
+3. **Unstructured document context** → Azure AI Search (`search_cloud_blob_contracts`)
+4. **Operational memory / meta state** → Postgres PGVector (`uvx mcp-server-pgvector`)
 
 ## Setup
 
@@ -70,7 +71,7 @@ Client B spawns `uvx mcp-server-pgvector`.
 
 | Surface | Owner | Consumers must update when changed |
 | --- | --- | --- |
-| `get_expiring_contracts`, `get_vendor_spend_summary`, `search_cloud_blob_contracts`, `fabric_health_check` | `mcp_server/server.py` | `copilot_agent/agent.py` system prompt |
+| `get_expiring_contracts`, `get_vendor_spend_summary`, `compare_contracts`, `check_missing_contract_fields`, `search_cloud_blob_contracts`, `fabric_health_check` | `mcp_server/server.py` | `copilot_agent/agent.py` system prompt / `offline_router.py` |
 | PGVector tools (external) | `uvx mcp-server-pgvector` | `copilot_agent/mcp_clients.py`, system prompt |
 | `POST /api/messages` | `copilot_agent/app.py` | `test_ui/app.py` (`COPILOT_MESSAGES_URL`) |
 

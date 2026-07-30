@@ -42,13 +42,36 @@ assert search["query_type"] == "semantic"
 assert search["count"] > 0
 assert search["documents"]
 
-compared = json.loads(server.compare_contracts("CON-0001", "CON-0002"))
+compared = json.loads(
+    server.compare_contracts(contract_ref_a="CON-0001", contract_ref_b="CON-0002")
+)
 assert compared.get("difference_count", 0) > 0, compared
 assert compared.get("left_contract_id") == "CON-0001"
+
+by_supplier = json.loads(
+    server.compare_contracts(supplier_name_a="Microsoft", supplier_name_b="Oracle")
+)
+assert by_supplier.get("difference_count", 0) > 0, by_supplier
+assert by_supplier.get("left_supplier_name")
+assert by_supplier.get("right_supplier_name")
 
 missing = json.loads(server.check_missing_contract_fields(max_rows=50))
 assert "incomplete_contracts" in missing
 assert missing["contracts_evaluated"] > 0
+
+missing_msft = json.loads(
+    server.check_missing_contract_fields(supplier_name="Microsoft", max_rows=50)
+)
+assert missing_msft["contracts_evaluated"] > 0
+
+expiring_filtered = json.loads(
+    server.get_expiring_contracts(days_ahead=3650, supplier_name="Microsoft", max_rows=50)
+)
+assert expiring_filtered["row_count"] > 0
+assert all(
+    "microsoft" in str(row.get("SupplierName") or "").lower()
+    for row in expiring_filtered["rows"]
+)
 
 health = json.loads(server.fabric_health_check())
 assert health["status"] == "ok", health

@@ -38,6 +38,8 @@ Strict Cognitive Routing Boundary — choose tools by intent domain:
 2. Contract analytics (compare two contracts, find missing/incomplete fields)
    → Use Fabric analytics tools from the fabric_data MCP server
      (`compare_contracts`, `check_missing_contract_fields`).
+   Lookup/filter contracts by ContractID/Number, SupplierName, ContractName,
+   ContractType, and/or AnnualContractValue (same dimensions on expiring/spend/search tools).
 
 3. Unstructured Deep Document Context (legal liabilities, contract language, raw PDF/text)
    → Use Azure AI Search tools from the fabric_data MCP server

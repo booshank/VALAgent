@@ -150,7 +150,184 @@ def _md_cell(value: Any) -> str:
     return text.replace("|", "\\|").replace("\n", " ").strip()
 
 
-def _summarize_compare_payload(raw: str, limit: int = 50) -> str:
+def _as_number(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(str(value).replace(",", "").replace("$", ""))
+    except ValueError:
+        return None
+
+
+def _lifecycle_days(effective: Any, expiration: Any) -> float | None:
+    from datetime import datetime
+
+    try:
+        start = datetime.fromisoformat(str(effective)[:10])
+        end = datetime.fromisoformat(str(expiration)[:10])
+        return float((end - start).days)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _diff_value(diffs: list[dict[str, Any]], field: str, left_id: str, right_id: str) -> tuple[Any, Any]:
+    for item in diffs:
+        if item.get("field") == field:
+            return item.get(str(left_id)), item.get(str(right_id))
+    return None, None
+
+
+def _build_compare_recommendation(
+    payload: dict[str, Any],
+    *,
+    risk_notes: list[str] | None = None,
+) -> str:
+    """Strategic advisor recommendation from quantitative + risk evidence."""
+    left_id = str(payload.get("left_contract_id") or "Left")
+    right_id = str(payload.get("right_contract_id") or "Right")
+    left_name = payload.get("left_contract_name") or left_id
+    right_name = payload.get("right_contract_name") or right_id
+    left_supplier = payload.get("left_supplier_name") or "Left supplier"
+    right_supplier = payload.get("right_supplier_name") or "Right supplier"
+    diffs = payload.get("differences") or []
+
+    left_annual = _as_number(payload.get("left_annual_cost"))
+    right_annual = _as_number(payload.get("right_annual_cost"))
+    left_value, right_value = _diff_value(diffs, "ContractValue", left_id, right_id)
+    left_value_n = _as_number(left_value)
+    right_value_n = _as_number(right_value)
+    left_eff, right_eff = _diff_value(diffs, "EffectiveDate", left_id, right_id)
+    left_exp, right_exp = _diff_value(diffs, "ExpirationDate", left_id, right_id)
+    # Fall back to matching equal dates when field not in differences.
+    if left_eff is None:
+        left_eff = right_eff = None
+    left_life = _lifecycle_days(left_eff, left_exp) if left_eff and left_exp else None
+    right_life = _lifecycle_days(right_eff, right_exp) if right_eff and right_exp else None
+    left_status, right_status = _diff_value(diffs, "ContractStatus", left_id, right_id)
+    left_auto, right_auto = _diff_value(diffs, "AutoRenewalFlag", left_id, right_id)
+
+    left_score = 0
+    right_score = 0
+    justifications: list[str] = []
+
+    # QUANTITATIVE COMPARISON
+    if left_annual is not None and right_annual is not None and left_annual != right_annual:
+        if left_annual < right_annual:
+            left_score += 2
+            justifications.append(
+                f"Lower annual cost on {left_id} ({left_annual} vs {right_annual}) — Fabric SQL."
+            )
+        else:
+            right_score += 2
+            justifications.append(
+                f"Lower annual cost on {right_id} ({right_annual} vs {left_annual}) — Fabric SQL."
+            )
+    if left_value_n is not None and right_value_n is not None and left_value_n != right_value_n:
+        if left_value_n < right_value_n:
+            left_score += 1
+            justifications.append(
+                f"Lower total contract value on {left_id} ({left_value_n} vs {right_value_n}) — Fabric SQL."
+            )
+        else:
+            right_score += 1
+            justifications.append(
+                f"Lower total contract value on {right_id} ({right_value_n} vs {left_value_n}) — Fabric SQL."
+            )
+    if left_life is not None and right_life is not None and left_life != right_life:
+        # Prefer longer committed lifecycle when both are active commercial terms.
+        if left_life > right_life:
+            left_score += 1
+            justifications.append(
+                f"Longer lifecycle on {left_id} ({int(left_life)} vs {int(right_life)} days) — Fabric SQL."
+            )
+        else:
+            right_score += 1
+            justifications.append(
+                f"Longer lifecycle on {right_id} ({int(right_life)} vs {int(left_life)} days) — Fabric SQL."
+            )
+
+    for label, status, auto, bump_left in (
+        (left_id, left_status, left_auto, True),
+        (right_id, right_status, right_auto, False),
+    ):
+        status_l = str(status or "").lower()
+        if status_l == "active":
+            if bump_left:
+                left_score += 1
+            else:
+                right_score += 1
+            justifications.append(f"{label} is Active — lower operational discontinuity risk (Fabric SQL).")
+        elif status_l in {"expired", "terminated"}:
+            if bump_left:
+                left_score -= 1
+            else:
+                right_score -= 1
+            justifications.append(f"{label} status is {status} — elevated continuity risk (Fabric SQL).")
+        if auto is True:
+            justifications.append(
+                f"{label} has AutoRenewal enabled — review exit timing / notice risk (Fabric SQL)."
+            )
+
+    # RISK & LIABILITY ASSESSMENT notes from Azure AI Search (when provided)
+    risk_notes = risk_notes or []
+    for note in risk_notes:
+        justifications.append(note)
+        note_l = note.lower()
+        # Lightweight directional scoring from clause language.
+        favors_left = left_id.lower() in note_l or str(left_supplier).lower() in note_l
+        favors_right = right_id.lower() in note_l or str(right_supplier).lower() in note_l
+        positive = any(
+            token in note_l
+            for token in ("indemnif", "favorable", "lower liability", "termination for convenience")
+        )
+        negative = any(
+            token in note_l
+            for token in ("unlimited liability", "broad liability", "lock-in", "auto-renew penalty")
+        )
+        if favors_left and positive:
+            left_score += 1
+        if favors_right and positive:
+            right_score += 1
+        if favors_left and negative:
+            left_score -= 1
+        if favors_right and negative:
+            right_score -= 1
+
+    if left_score > right_score:
+        winner_id, winner_name, winner_supplier = left_id, left_name, left_supplier
+    elif right_score > left_score:
+        winner_id, winner_name, winner_supplier = right_id, right_name, right_supplier
+    else:
+        winner_id, winner_name, winner_supplier = left_id, left_name, left_supplier
+        justifications.append(
+            "Scores were close; defaulting to the left contract pending stronger clause evidence "
+            "from Azure AI Search."
+        )
+
+    if not justifications:
+        justifications.append(
+            "Insufficient differentiating quantitative/risk signal; recommendation is provisional."
+        )
+
+    lines = [
+        "",
+        "## Recommendation",
+        "",
+        f"**Select {winner_id} ({winner_name} / {winner_supplier}) as structurally superior / lower risk.**",
+        "",
+        "Business justifications:",
+    ]
+    for item in justifications[:8]:
+        lines.append(f"- {item}")
+    return "\n".join(lines)
+
+
+def _summarize_compare_payload(
+    raw: str,
+    limit: int = 50,
+    *,
+    risk_notes: list[str] | None = None,
+) -> str:
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError:
@@ -171,6 +348,8 @@ def _summarize_compare_payload(raw: str, limit: int = 50) -> str:
 
     lines = [
         f"### Contract comparison: {left_label} vs {right_label}",
+        "",
+        "#### Quantitative snapshot (Fabric SQL)",
         "",
         "| Attribute | Left | Right |",
         "| --- | --- | --- |",
@@ -214,7 +393,13 @@ def _summarize_compare_payload(raw: str, limit: int = 50) -> str:
         if len(matching) > limit:
             lines.append(f"| … | {len(matching) - limit} more matching fields omitted |")
 
+    if risk_notes:
+        lines.extend(["", "#### Risk & liability signals (Azure AI Search)", ""])
+        for note in risk_notes[:6]:
+            lines.append(f"- {note}")
+
     lines.extend(["", "Source: Fabric SQL Gold (MCP `compare_contracts`)"])
+    lines.append(_build_compare_recommendation(payload, risk_notes=risk_notes))
     return "\n".join(lines)
 
 
@@ -450,7 +635,76 @@ async def run_offline_turn(user_text: str) -> str:
                         "defaulting comparison to CON-0001 vs CON-0002."
                     )
                 raw = await _ainvoke_tool(tool, **left, **right)
-                sections.append(_summarize_compare_payload(raw))
+
+                # Enrich compare with spend + clause search (orchestrator layer only).
+                risk_notes: list[str] = []
+                try:
+                    compare_payload = json.loads(raw)
+                except json.JSONDecodeError:
+                    compare_payload = {}
+                left_supplier = compare_payload.get("left_supplier_name")
+                right_supplier = compare_payload.get("right_supplier_name")
+                spend_tool = tools.get("get_vendor_spend_summary")
+                search_tool = tools.get("search_cloud_blob_contracts")
+                if spend_tool and left_supplier:
+                    spend_raw = await _ainvoke_tool(
+                        spend_tool, max_rows=5, supplier_name=str(left_supplier)
+                    )
+                    risk_notes.append(
+                        f"Historical spend context for {left_supplier} retrieved via "
+                        f"get_vendor_spend_summary (Fabric SQL)."
+                    )
+                    del spend_raw
+                if spend_tool and right_supplier:
+                    spend_raw = await _ainvoke_tool(
+                        spend_tool, max_rows=5, supplier_name=str(right_supplier)
+                    )
+                    risk_notes.append(
+                        f"Historical spend context for {right_supplier} retrieved via "
+                        f"get_vendor_spend_summary (Fabric SQL)."
+                    )
+                    del spend_raw
+                if search_tool:
+                    for label, supplier in (
+                        (compare_payload.get("left_contract_id"), left_supplier),
+                        (compare_payload.get("right_contract_id"), right_supplier),
+                    ):
+                        if not supplier:
+                            continue
+                        query = (
+                            f"{supplier} liability indemnification termination notice "
+                            f"cap limitation of liability"
+                        )
+                        search_raw = await _ainvoke_tool(
+                            search_tool,
+                            query=query,
+                            top=3,
+                            supplier_name=str(supplier),
+                        )
+                        try:
+                            search_payload = json.loads(search_raw)
+                            docs = search_payload.get("documents") or []
+                            if docs:
+                                snippet = str(
+                                    docs[0].get("content") or docs[0].get("title") or ""
+                                ).replace("\n", " ")[:180]
+                                risk_notes.append(
+                                    f"{label}/{supplier} clause scan: {snippet} "
+                                    "(Azure AI Search)."
+                                )
+                            else:
+                                risk_notes.append(
+                                    f"{label}/{supplier}: no liability/termination clauses "
+                                    "returned by Azure AI Search; legal risk remains unverified."
+                                )
+                        except json.JSONDecodeError:
+                            risk_notes.append(
+                                f"{label}/{supplier}: clause search returned non-JSON payload."
+                            )
+
+                sections.append(
+                    _summarize_compare_payload(raw, risk_notes=risk_notes)
+                )
             elif name == "check_missing_contract_fields":
                 raw = await _ainvoke_tool(tool, max_rows=100, **shared_filters)
                 sections.append(_summarize_missing_payload(raw))

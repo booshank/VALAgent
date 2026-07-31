@@ -126,9 +126,12 @@ if _OFFLINE_MOCKS_ENABLED:
 from azure_search import hybrid_semantic_search  # noqa: E402
 from contract_analytics import (  # noqa: E402
     DEFAULT_REQUIRED_FIELDS,
+    build_criteria,
     check_missing_fields_in_rows,
     compare_contract_rows,
-    find_contract_row,
+    compare_many_contract_rows,
+    filter_contracts,
+    resolve_contract,
 )
 from fabric_sql import execute_query  # noqa: E402
 
@@ -166,6 +169,37 @@ def _load_vendor_contracts(max_rows: int = 500) -> list[dict[str, Any]]:
     rows = payload.get("rows") or []
     return [row for row in rows if isinstance(row, dict)]
 
+
+def _rows_payload(rows: list[dict[str, Any]], *, criteria: dict[str, Any] | None = None) -> dict[str, Any]:
+    columns: list[str] = list(rows[0].keys()) if rows else []
+    return {
+        "columns": columns,
+        "row_count": len(rows),
+        "truncated": False,
+        "criteria": criteria or {},
+        "rows": rows,
+    }
+
+
+def _resolve_or_error(
+    rows: list[dict[str, Any]],
+    criteria: dict[str, Any],
+    *,
+    side_label: str,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    resolved = resolve_contract(rows, criteria)
+    contract = resolved.get("contract")
+    if contract is not None:
+        return contract, None
+    return None, {
+        "error": f"Could not uniquely resolve {side_label} contract from criteria",
+        "side": side_label,
+        "criteria": criteria,
+        "match_count": resolved.get("match_count", 0),
+        "candidates": resolved.get("candidates", []),
+        "ambiguous": resolved.get("ambiguous", False),
+    }
+
 if _OFFLINE_MOCKS_ENABLED:
     # Avoid building a real Fabric ODBC connection string during offline staging.
     patch(
@@ -191,19 +225,32 @@ mcp = FastMCP(
 
 
 @mcp.tool()
-def get_expiring_contracts(days_ahead: int = 90, max_rows: int = 200) -> str:
+def get_expiring_contracts(
+    days_ahead: int = 90,
+    max_rows: int = 200,
+    contract_ref: str | None = None,
+    supplier_name: str | None = None,
+    contract_name: str | None = None,
+    contract_type: str | None = None,
+    annual_cost: float | None = None,
+) -> str:
     """
     Return vendor contracts approaching expiration from the Fabric Gold layer.
 
-    Use for relational / financial intents involving contract renewal dates,
-    upcoming expirations, and structured contract warehouse facts.
+    Optional shared lookup filters narrow results by ContractID/Number,
+    SupplierName, ContractName, ContractType, or AnnualContractValue.
 
     Args:
         days_ahead: Lookahead window in days from today (default 90).
         max_rows: Maximum rows to return (default 200).
+        contract_ref: Optional ContractID or ContractNumber filter.
+        supplier_name: Optional supplier name filter (e.g. Microsoft).
+        contract_name: Optional contract name filter.
+        contract_type: Optional contract type filter (e.g. SaaS Subscription).
+        annual_cost: Optional annual contract value filter.
 
     Returns:
-        JSON string with columns, row_count, truncated flag, and rows.
+        JSON string with columns, row_count, criteria, and rows.
     """
     sql = f"""
         SELECT
@@ -230,23 +277,79 @@ def get_expiring_contracts(days_ahead: int = 90, max_rows: int = 200) -> str:
         ORDER BY ExpirationDate ASC
     """
     result = execute_query(sql, max_rows=max_rows)
-    return json.dumps(result, default=str)
+    rows = [row for row in (result.get("rows") or []) if isinstance(row, dict)]
+    criteria = build_criteria(
+        contract_ref=contract_ref,
+        supplier_name=supplier_name,
+        contract_name=contract_name,
+        contract_type=contract_type,
+        annual_cost=annual_cost,
+    )
+    if criteria:
+        rows = filter_contracts(rows, criteria)
+    payload = _rows_payload(rows, criteria=criteria)
+    return json.dumps(payload, default=str)
 
 
 @mcp.tool()
-def get_vendor_spend_summary(max_rows: int = 200) -> str:
+def get_vendor_spend_summary(
+    max_rows: int = 200,
+    supplier_name: str | None = None,
+    contract_type: str | None = None,
+    annual_cost: float | None = None,
+) -> str:
     """
     Return vendor spend rollups from the Fabric SQL Gold Layer.
 
-    Use for relational / financial intents: supplier spend metrics, contract
-    value aggregates, and structured warehouse facts.
+    Optional filters use the same lookup dimensions as contract analytics:
+    SupplierName, ContractType (via contract rollups), and annual cost.
 
     Args:
         max_rows: Maximum rows to return (default 200).
+        supplier_name: Optional supplier name filter.
+        contract_type: Optional contract type filter applied via contract rows.
+        annual_cost: Optional annual-cost filter applied via contract rows.
 
     Returns:
-        JSON string with columns, row_count, truncated flag, and rows.
+        JSON string with columns, row_count, criteria, and rows.
     """
+    criteria = build_criteria(
+        supplier_name=supplier_name,
+        contract_type=contract_type,
+        annual_cost=annual_cost,
+    )
+
+    # When type/cost filters are present, derive spend from filtered contracts.
+    if criteria.get("contract_type") or criteria.get("annual_cost"):
+        contracts = filter_contracts(_load_vendor_contracts(max_rows=500), criteria)
+        rolled: dict[str, dict[str, Any]] = {}
+        for row in contracts:
+            key = str(row.get("SupplierID") or row.get("SupplierName") or "UNKNOWN")
+            bucket = rolled.setdefault(
+                key,
+                {
+                    "SupplierID": row.get("SupplierID"),
+                    "SupplierName": row.get("SupplierName"),
+                    "ContractCount": 0,
+                    "TotalContractValue": 0.0,
+                    "TotalAnnualContractValue": 0.0,
+                    "Currency": row.get("Currency"),
+                    "BusinessUnits": [],
+                },
+            )
+            bucket["ContractCount"] += 1
+            bucket["TotalContractValue"] += float(row.get("ContractValue") or 0)
+            bucket["TotalAnnualContractValue"] += float(row.get("AnnualContractValue") or 0)
+            bu = row.get("BusinessUnit")
+            if bu and bu not in bucket["BusinessUnits"]:
+                bucket["BusinessUnits"].append(bu)
+        rows = sorted(
+            rolled.values(),
+            key=lambda item: float(item.get("TotalContractValue") or 0),
+            reverse=True,
+        )[:max_rows]
+        return json.dumps(_rows_payload(rows, criteria=criteria), default=str)
+
     sql = """
         SELECT
             SupplierID,
@@ -260,71 +363,240 @@ def get_vendor_spend_summary(max_rows: int = 200) -> str:
         ORDER BY TotalContractValue DESC
     """
     result = execute_query(sql, max_rows=max_rows)
-    return json.dumps(result, default=str)
+    rows = [row for row in (result.get("rows") or []) if isinstance(row, dict)]
+    if criteria.get("supplier_name"):
+        rows = [
+            row
+            for row in rows
+            if str(criteria["supplier_name"]).lower() in str(row.get("SupplierName") or "").lower()
+        ]
+    return json.dumps(_rows_payload(rows, criteria=criteria), default=str)
+
+
+def _split_csv(value: str | None) -> list[str]:
+    if not value:
+        return []
+    return [part.strip() for part in str(value).split(",") if part.strip()]
+
+
+def _build_side_criteria_list(
+    *,
+    contract_refs: str | None = None,
+    supplier_names: str | None = None,
+    contract_names: str | None = None,
+    contract_types: str | None = None,
+    annual_costs: str | None = None,
+    contract_ref_a: str | None = None,
+    contract_ref_b: str | None = None,
+    supplier_name_a: str | None = None,
+    supplier_name_b: str | None = None,
+    contract_name_a: str | None = None,
+    contract_name_b: str | None = None,
+    contract_type_a: str | None = None,
+    contract_type_b: str | None = None,
+    annual_cost_a: float | None = None,
+    annual_cost_b: float | None = None,
+) -> list[dict[str, Any]]:
+    """
+    Build 2..N lookup criteria.
+
+    Prefer explicit multi CSV lists when provided; otherwise fall back to legacy
+    pairwise *_a / *_b arguments.
+    """
+    refs = _split_csv(contract_refs)
+    suppliers = _split_csv(supplier_names)
+    names = _split_csv(contract_names)
+    types = _split_csv(contract_types)
+    costs_raw = _split_csv(annual_costs)
+    costs: list[float] = []
+    for item in costs_raw:
+        try:
+            costs.append(float(item.replace(",", "").replace("$", "")))
+        except ValueError:
+            continue
+
+    multi_len = max(len(refs), len(suppliers), len(names), len(types), len(costs), 0)
+    sides: list[dict[str, Any]] = []
+    if multi_len >= 2:
+        for idx in range(multi_len):
+            side = build_criteria(
+                contract_ref=refs[idx] if idx < len(refs) else None,
+                supplier_name=suppliers[idx] if idx < len(suppliers) else None,
+                contract_name=names[idx] if idx < len(names) else None,
+                contract_type=types[idx] if idx < len(types) else None,
+                annual_cost=costs[idx] if idx < len(costs) else None,
+            )
+            if side:
+                sides.append(side)
+        return sides
+
+    left = build_criteria(
+        contract_ref=contract_ref_a,
+        supplier_name=supplier_name_a,
+        contract_name=contract_name_a,
+        contract_type=contract_type_a,
+        annual_cost=annual_cost_a,
+    )
+    right = build_criteria(
+        contract_ref=contract_ref_b,
+        supplier_name=supplier_name_b,
+        contract_name=contract_name_b,
+        contract_type=contract_type_b,
+        annual_cost=annual_cost_b,
+    )
+    return [side for side in (left, right) if side]
 
 
 @mcp.tool()
-def compare_contracts(contract_id_a: str, contract_id_b: str) -> str:
+def compare_contracts(
+    contract_refs: str | None = None,
+    supplier_names: str | None = None,
+    contract_names: str | None = None,
+    contract_types: str | None = None,
+    annual_costs: str | None = None,
+    contract_ref_a: str | None = None,
+    contract_ref_b: str | None = None,
+    supplier_name_a: str | None = None,
+    supplier_name_b: str | None = None,
+    contract_name_a: str | None = None,
+    contract_name_b: str | None = None,
+    contract_type_a: str | None = None,
+    contract_type_b: str | None = None,
+    annual_cost_a: float | None = None,
+    annual_cost_b: float | None = None,
+) -> str:
     """
-    Compare two vendor contracts field-by-field from the Fabric Gold layer.
+    Compare two or more vendor contracts field-by-field from the Fabric Gold layer.
 
-    Use when the user asks to diff contracts, compare versions/parents/children,
-    or highlight commercial term differences between two ContractIDs / numbers.
+    Prefer multi-contract CSV inputs (`contract_refs`, `supplier_names`, etc.) for
+    N-way comparison. Legacy pairwise `*_a` / `*_b` arguments remain supported.
+
+    Shared lookup dimensions: ContractID/Number, SupplierName, ContractName,
+    ContractType, and/or AnnualContractValue.
 
     Args:
-        contract_id_a: First ContractID or ContractNumber.
-        contract_id_b: Second ContractID or ContractNumber.
+        contract_refs: Comma-separated ContractIDs/Numbers (2+), e.g. CON-0001,CON-0002,CON-0003.
+        supplier_names: Comma-separated supplier names for N-way compare.
+        contract_names: Comma-separated contract names for N-way compare.
+        contract_types: Comma-separated contract types for N-way compare.
+        annual_costs: Comma-separated annual costs for N-way compare.
+        contract_ref_a: Legacy left ContractID or ContractNumber.
+        contract_ref_b: Legacy right ContractID or ContractNumber.
+        supplier_name_a: Legacy left supplier name.
+        supplier_name_b: Legacy right supplier name.
+        contract_name_a: Legacy left contract name fragment.
+        contract_name_b: Legacy right contract name fragment.
+        contract_type_a: Legacy left contract type.
+        contract_type_b: Legacy right contract type.
+        annual_cost_a: Legacy left annual contract value.
+        annual_cost_b: Legacy right annual contract value.
 
     Returns:
-        JSON string with matching fields and a differences list.
+        JSON string with N-way field matrix (and pairwise compatibility fields when N=2).
     """
     rows = _load_vendor_contracts(max_rows=500)
-    left = find_contract_row(rows, contract_id_a)
-    right = find_contract_row(rows, contract_id_b)
-    if left is None or right is None:
+    side_criteria = _build_side_criteria_list(
+        contract_refs=contract_refs,
+        supplier_names=supplier_names,
+        contract_names=contract_names,
+        contract_types=contract_types,
+        annual_costs=annual_costs,
+        contract_ref_a=contract_ref_a,
+        contract_ref_b=contract_ref_b,
+        supplier_name_a=supplier_name_a,
+        supplier_name_b=supplier_name_b,
+        contract_name_a=contract_name_a,
+        contract_name_b=contract_name_b,
+        contract_type_a=contract_type_a,
+        contract_type_b=contract_type_b,
+        annual_cost_a=annual_cost_a,
+        annual_cost_b=annual_cost_b,
+    )
+    if len(side_criteria) < 2:
         return json.dumps(
             {
-                "error": "One or both contracts were not found",
-                "contract_id_a": contract_id_a,
-                "contract_id_b": contract_id_b,
-                "found_a": left is not None,
-                "found_b": right is not None,
+                "error": "Provide at least two contract lookup sides for comparison",
+                "side_criteria": side_criteria,
             },
             default=str,
         )
-    result = compare_contract_rows(
-        left,
-        right,
-        left_id=str(left.get("ContractID") or contract_id_a),
-        right_id=str(right.get("ContractID") or contract_id_b),
-    )
+
+    resolved_rows: list[dict[str, Any]] = []
+    resolved_meta: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    for idx, criteria in enumerate(side_criteria):
+        contract, err = _resolve_or_error(rows, criteria, side_label=f"side_{idx+1}")
+        if err or contract is None:
+            errors.append(err or {"error": f"side_{idx+1} unresolved", "criteria": criteria})
+            continue
+        resolved_rows.append(contract)
+        resolved_meta.append({"side": f"side_{idx+1}", "criteria": criteria, "ContractID": contract.get("ContractID")})
+
+    if len(resolved_rows) < 2:
+        return json.dumps(
+            {
+                "error": "Could not resolve at least two contracts for comparison",
+                "resolved": resolved_meta,
+                "errors": errors,
+            },
+            default=str,
+        )
+
+    if len(resolved_rows) == 2:
+        result = compare_contract_rows(
+            resolved_rows[0],
+            resolved_rows[1],
+            left_id=str(resolved_rows[0].get("ContractID") or "left"),
+            right_id=str(resolved_rows[1].get("ContractID") or "right"),
+        )
+    else:
+        result = compare_many_contract_rows(resolved_rows)
+
+    result["side_criteria"] = side_criteria
+    result["resolved"] = resolved_meta
+    if errors:
+        result["resolution_warnings"] = errors
     return json.dumps(result, default=str)
 
 
 @mcp.tool()
 def check_missing_contract_fields(
-    contract_id: str | None = None,
+    contract_ref: str | None = None,
+    supplier_name: str | None = None,
+    contract_name: str | None = None,
+    contract_type: str | None = None,
+    annual_cost: float | None = None,
     max_rows: int = 200,
 ) -> str:
     """
     Check vendor contracts for missing or blank required commercial fields.
 
-    Use for data-quality / completeness intents: incomplete contracts, missing
-    supplier, value, dates, owner, or other mandatory attributes.
+    Optional shared lookup filters narrow the scan by ContractID/Number,
+    SupplierName, ContractName, ContractType, or AnnualContractValue.
 
     Args:
-        contract_id: Optional ContractID or ContractNumber to check a single record.
-            When omitted, scans the Gold contract set (up to max_rows).
-        max_rows: Maximum contracts to evaluate in a bulk scan (default 200).
+        contract_ref: Optional ContractID or ContractNumber.
+        supplier_name: Optional supplier name filter.
+        contract_name: Optional contract name filter.
+        contract_type: Optional contract type filter.
+        annual_cost: Optional annual contract value filter.
+        max_rows: Maximum contracts loaded before filtering (default 200).
 
     Returns:
         JSON string with incomplete contracts and their missing_fields lists.
     """
     rows = _load_vendor_contracts(max_rows=max_rows)
+    criteria = build_criteria(
+        contract_ref=contract_ref,
+        supplier_name=supplier_name,
+        contract_name=contract_name,
+        contract_type=contract_type,
+        annual_cost=annual_cost,
+    )
     result = check_missing_fields_in_rows(
         rows,
         required_fields=list(DEFAULT_REQUIRED_FIELDS),
-        contract_ref=contract_id,
+        criteria=criteria,
     )
     return json.dumps(result, default=str)
 
@@ -334,28 +606,64 @@ def search_cloud_blob_contracts(
     query: str,
     top: int = 20,
     filter_expression: str | None = None,
+    supplier_name: str | None = None,
+    contract_name: str | None = None,
+    contract_type: str | None = None,
+    annual_cost: float | None = None,
+    contract_ref: str | None = None,
 ) -> str:
     """
     Hybrid semantic search over cloud-blob contract documents in Azure AI Search.
 
-    Use for unstructured deep document context: legal liabilities, contract
-    clauses, raw PDF/text excerpts, and policy language.
-
-    Always runs with query_type=\"semantic\" and hybrid vector+keyword retrieval.
+    Optional shared lookup filters further narrow returned documents by
+    supplier/name/type/annual cost/contract ref metadata when present.
 
     Args:
         query: Natural-language search text.
         top: Number of documents to return (default 20).
         filter_expression: Optional OData filter on index fields.
+        supplier_name: Optional supplier name metadata filter.
+        contract_name: Optional contract/title metadata filter.
+        contract_type: Optional contract type metadata filter.
+        annual_cost: Optional annual cost metadata filter.
+        contract_ref: Optional contract id metadata filter.
 
     Returns:
         JSON string with matched documents and semantic metadata.
     """
     result = hybrid_semantic_search(
         query,
-        top=top,
+        top=max(top * 3, top),
         filter_expression=filter_expression,
     )
+    docs = [doc for doc in (result.get("documents") or []) if isinstance(doc, dict)]
+    criteria = build_criteria(
+        contract_ref=contract_ref,
+        supplier_name=supplier_name,
+        contract_name=contract_name,
+        contract_type=contract_type,
+        annual_cost=annual_cost,
+    )
+    if criteria:
+        # Map search docs onto the shared contract filter shape.
+        projected = [
+            {
+                "ContractID": doc.get("contractId") or doc.get("id"),
+                "ContractNumber": doc.get("contractNumber"),
+                "ContractName": doc.get("title") or doc.get("contractName"),
+                "ContractType": doc.get("contractType"),
+                "SupplierName": doc.get("supplierName"),
+                "AnnualContractValue": doc.get("annualContractValue") or doc.get("annual_cost"),
+                "_doc": doc,
+            }
+            for doc in docs
+        ]
+        kept = filter_contracts(projected, criteria)
+        docs = [item["_doc"] for item in kept]
+    docs = docs[:top]
+    result["documents"] = docs
+    result["count"] = len(docs)
+    result["criteria"] = criteria
     return json.dumps(result, default=str)
 
 

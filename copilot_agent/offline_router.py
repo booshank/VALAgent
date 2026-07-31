@@ -36,10 +36,38 @@ _COMPARE_RE = re.compile(
     re.I,
 )
 _MISSING_RE = re.compile(
-    r"\b(missing|incomplete|blank|null|data\s*quality|completeness|required\s*field)\b",
+    r"\b(missing|incomplete|blank|null|data\s*quality|completeness|required\s*field|"
+    r"red[\s-]?flag|compliance|audit|indemnif\w*|liabilit\w*|sla)\b",
+    re.I,
+)
+_EXPOSURE_RE = re.compile(
+    r"\b(exposure|penalty|penalties|financial\s*risk|what\s*if|breach|damages)\b",
+    re.I,
+)
+_RENEWAL_RE = re.compile(
+    r"\b(renew\w*|renegotiat\w*|terminat\w*|auto[\s-]?renew|strategy\s*sheet)\b",
     re.I,
 )
 _CONTRACT_ID_RE = re.compile(r"\b(?:CON|CNT)-\d+\b", re.I)
+_ANNUAL_COST_RE = re.compile(
+    r"\b(?:annual(?:\s*contract)?\s*(?:cost|value)|acv)\s*[:=]?\s*\$?([\d,]+(?:\.\d+)?)\b",
+    re.I,
+)
+_CONTRACT_TYPE_RE = re.compile(
+    r"\b(Software License|SaaS Subscription|Consulting Services|Support Agreement|"
+    r"Managed Services|Cloud Subscription|Professional Services)\b",
+    re.I,
+)
+_SUPPLIER_RE = re.compile(
+    r"\b(Microsoft|Amazon AWS|Amazon|Google Cloud|Google|Oracle|SAP|IBM|Salesforce|"
+    r"ServiceNow|Adobe|Cisco|VMware|Snowflake|Databricks|Accenture)\b",
+    re.I,
+)
+_CONTRACT_NAME_RE = re.compile(
+    r"(?:contract\s*name|named)\s*[:=]?\s*[\"']?([A-Za-z0-9][A-Za-z0-9 ._/&-]{3,})[\"']?",
+    re.I,
+)
+_COMPARE_SPLIT_RE = re.compile(r"\b(?:vs\.?|versus|and|with|against)\b", re.I)
 
 
 def _tool_map(tools: list[BaseTool]) -> dict[str, BaseTool]:
@@ -47,7 +75,9 @@ def _tool_map(tools: list[BaseTool]) -> dict[str, BaseTool]:
 
 
 async def _ainvoke_tool(tool: BaseTool, **kwargs: Any) -> str:
-    result = await tool.ainvoke(kwargs)
+    # Drop None values so MCP schemas don't receive explicit nulls unexpectedly.
+    clean = {key: value for key, value in kwargs.items() if value is not None}
+    result = await tool.ainvoke(clean)
     if isinstance(result, str):
         return result
     if isinstance(result, list):
@@ -72,20 +102,26 @@ def _summarize_sql_payload(raw: str, *, title: str, limit: int = 5) -> str:
     if isinstance(payload, list):
         rows = payload
         count = len(rows)
+        criteria: dict[str, Any] = {}
     elif isinstance(payload, dict):
         rows = payload.get("rows") or []
         count = payload.get("row_count", len(rows))
+        criteria = payload.get("criteria") or {}
     else:
         return f"{title}\n{raw[:2000]}"
 
     lines = [f"{title} ({count} rows)"]
+    if criteria:
+        lines.append(f"Filters: {criteria}")
     for row in rows[:limit]:
         if not isinstance(row, dict):
             lines.append(f"- {row}")
             continue
         preferred = [
             row.get("SupplierName") or row.get("ContractName") or row.get("ContractID"),
+            row.get("ContractType"),
             row.get("TotalContractValue") or row.get("ContractValue"),
+            row.get("AnnualContractValue") or row.get("TotalAnnualContractValue"),
             row.get("ExpirationDate") or row.get("Currency"),
         ]
         bits = [str(v) for v in preferred if v not in (None, "")]
@@ -104,6 +140,8 @@ def _summarize_search_payload(raw: str, *, query: str, limit: int = 20) -> str:
 
     docs = payload.get("documents") or []
     lines = [f"Document search for '{query}' ({len(docs)} hits)"]
+    if payload.get("criteria"):
+        lines.append(f"Filters: {payload.get('criteria')}")
     for doc in docs[:limit]:
         if not isinstance(doc, dict):
             lines.append(f"- {doc}")
@@ -116,7 +154,219 @@ def _summarize_search_payload(raw: str, *, query: str, limit: int = 20) -> str:
     return "\n".join(lines)
 
 
-def _summarize_compare_payload(raw: str, limit: int = 20) -> str:
+def _md_cell(value: Any) -> str:
+    text = "—" if value is None or value == "" else str(value)
+    return text.replace("|", "\\|").replace("\n", " ").strip()
+
+
+def _as_number(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(str(value).replace(",", "").replace("$", ""))
+    except ValueError:
+        return None
+
+
+def _lifecycle_days(effective: Any, expiration: Any) -> float | None:
+    from datetime import datetime
+
+    try:
+        start = datetime.fromisoformat(str(effective)[:10])
+        end = datetime.fromisoformat(str(expiration)[:10])
+        return float((end - start).days)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _diff_value(diffs: list[dict[str, Any]], field: str, left_id: str, right_id: str) -> tuple[Any, Any]:
+    for item in diffs:
+        if item.get("field") == field:
+            return item.get(str(left_id)), item.get(str(right_id))
+    return None, None
+
+
+def _build_compare_recommendation(
+    payload: dict[str, Any],
+    *,
+    risk_notes: list[str] | None = None,
+) -> str:
+    """Strategic advisor recommendation from quantitative + risk evidence (2..N)."""
+    contracts = payload.get("contracts") or []
+    if len(contracts) >= 2:
+        return _build_multi_compare_recommendation(payload, risk_notes=risk_notes)
+
+    # Legacy pairwise payload shape
+    left_id = str(payload.get("left_contract_id") or "Left")
+    right_id = str(payload.get("right_contract_id") or "Right")
+    synthetic = {
+        "contracts": [
+            {
+                "ContractID": left_id,
+                "ContractName": payload.get("left_contract_name") or left_id,
+                "SupplierName": payload.get("left_supplier_name") or "Left supplier",
+                "ContractStatus": None,
+                "ContractValue": None,
+                "AnnualContractValue": payload.get("left_annual_cost"),
+                "EffectiveDate": None,
+                "ExpirationDate": None,
+                "AutoRenewalFlag": None,
+            },
+            {
+                "ContractID": right_id,
+                "ContractName": payload.get("right_contract_name") or right_id,
+                "SupplierName": payload.get("right_supplier_name") or "Right supplier",
+                "ContractStatus": None,
+                "ContractValue": None,
+                "AnnualContractValue": payload.get("right_annual_cost"),
+                "EffectiveDate": None,
+                "ExpirationDate": None,
+                "AutoRenewalFlag": None,
+            },
+        ]
+    }
+    # Fill status/value/dates from differences when present.
+    diffs = payload.get("differences") or []
+    for item in diffs:
+        field = item.get("field")
+        if field in {
+            "ContractStatus",
+            "ContractValue",
+            "EffectiveDate",
+            "ExpirationDate",
+            "AutoRenewalFlag",
+            "AnnualContractValue",
+        }:
+            synthetic["contracts"][0][field] = item.get(left_id)
+            synthetic["contracts"][1][field] = item.get(right_id)
+    return _build_multi_compare_recommendation(synthetic, risk_notes=risk_notes)
+
+
+def _build_multi_compare_recommendation(
+    payload: dict[str, Any],
+    *,
+    risk_notes: list[str] | None = None,
+) -> str:
+    contracts = list(payload.get("contracts") or [])
+    if len(contracts) < 2:
+        return "\n## Recommendation\n\nUnable to recommend — fewer than two contracts resolved."
+
+    scored: list[dict[str, Any]] = []
+    justifications: list[str] = []
+    annuals = [
+        (_as_number(row.get("AnnualContractValue")), str(row.get("ContractID")))
+        for row in contracts
+    ]
+    annuals_valid = [(val, cid) for val, cid in annuals if val is not None]
+    if annuals_valid:
+        best_annual = min(annuals_valid, key=lambda item: item[0])
+        justifications.append(
+            f"Lowest annual cost is {best_annual[1]} at {best_annual[0]} — Fabric SQL."
+        )
+
+    values = [
+        (_as_number(row.get("ContractValue")), str(row.get("ContractID")))
+        for row in contracts
+    ]
+    values_valid = [(val, cid) for val, cid in values if val is not None]
+    if values_valid:
+        best_value = min(values_valid, key=lambda item: item[0])
+        justifications.append(
+            f"Lowest total contract value is {best_value[1]} at {best_value[0]} — Fabric SQL."
+        )
+
+    for row in contracts:
+        cid = str(row.get("ContractID"))
+        score = 0
+        annual = _as_number(row.get("AnnualContractValue"))
+        total = _as_number(row.get("ContractValue"))
+        life = _lifecycle_days(row.get("EffectiveDate"), row.get("ExpirationDate"))
+        status = str(row.get("ContractStatus") or "").lower()
+        auto = row.get("AutoRenewalFlag")
+
+        if annuals_valid and annual is not None:
+            min_annual = min(val for val, _ in annuals_valid)
+            max_annual = max(val for val, _ in annuals_valid)
+            if max_annual != min_annual:
+                # Lower cost => higher score
+                score += 2.0 * (1.0 - ((annual - min_annual) / (max_annual - min_annual)))
+        if values_valid and total is not None:
+            min_total = min(val for val, _ in values_valid)
+            max_total = max(val for val, _ in values_valid)
+            if max_total != min_total:
+                score += 1.0 * (1.0 - ((total - min_total) / (max_total - min_total)))
+        if life is not None:
+            score += min(life / 3650.0, 1.0)  # longer lifecycle modest bonus
+        if status == "active":
+            score += 1.0
+            justifications.append(f"{cid} is Active — lower discontinuity risk (Fabric SQL).")
+        elif status in {"expired", "terminated"}:
+            score -= 1.0
+            justifications.append(f"{cid} status is {row.get('ContractStatus')} — elevated continuity risk (Fabric SQL).")
+        if auto is True:
+            justifications.append(
+                f"{cid} has AutoRenewal enabled — review exit timing / notice risk (Fabric SQL)."
+            )
+
+        note_blob = " ".join(risk_notes or []).lower()
+        supplier = str(row.get("SupplierName") or "").lower()
+        if cid.lower() in note_blob or (supplier and supplier in note_blob):
+            if any(token in note_blob for token in ("indemnif", "favorable", "lower liability")):
+                score += 0.5
+            if any(token in note_blob for token in ("unlimited liability", "lock-in")):
+                score -= 0.5
+
+        scored.append(
+            {
+                "ContractID": cid,
+                "ContractName": row.get("ContractName"),
+                "SupplierName": row.get("SupplierName"),
+                "score": score,
+            }
+        )
+
+    ranked = sorted(scored, key=lambda item: item["score"], reverse=True)
+    winner = ranked[0]
+    for note in risk_notes or []:
+        justifications.append(note)
+    if not justifications:
+        justifications.append(
+            "Insufficient differentiating quantitative/risk signal; recommendation is provisional."
+        )
+
+    ranking_lines = [
+        f"- {idx+1}. {item['ContractID']} ({item.get('ContractName')} / {item.get('SupplierName')}) — score {item['score']:.2f}"
+        for idx, item in enumerate(ranked)
+    ]
+    lines = [
+        "",
+        "## Recommendation",
+        "",
+        f"**Select {winner['ContractID']} ({winner.get('ContractName')} / {winner.get('SupplierName')}) as structurally superior / lower risk among {len(ranked)} contracts.**",
+        "",
+        "Ranking:",
+        *ranking_lines,
+        "",
+        "Business justifications:",
+    ]
+    # de-dupe justifications while preserving order
+    seen: set[str] = set()
+    for item in justifications:
+        if item in seen:
+            continue
+        seen.add(item)
+        lines.append(f"- {item}")
+        if len(seen) >= 10:
+            break
+    return "\n".join(lines)
+
+
+def _summarize_compare_payload(
+    raw: str,
+    limit: int = 50,
+    *,
+    risk_notes: list[str] | None = None,
+) -> str:
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError:
@@ -124,27 +374,132 @@ def _summarize_compare_payload(raw: str, limit: int = 20) -> str:
 
     if payload.get("error"):
         return (
-            f"Contract comparison failed: {payload.get('error')} "
-            f"(A found={payload.get('found_a')}, B found={payload.get('found_b')})"
+            f"Contract comparison failed: {payload.get('error')}\n"
+            f"{json.dumps({k: payload.get(k) for k in ('side_criteria', 'resolved', 'errors', 'left', 'right') if k in payload}, default=str)[:1500]}"
         )
 
-    diffs = payload.get("differences") or []
-    left_id = payload.get("left_contract_id")
-    right_id = payload.get("right_contract_id")
+    contracts = payload.get("contracts") or []
+    # Normalize pairwise payloads into contracts list for tabular rendering.
+    if len(contracts) < 2 and payload.get("left_contract_id") and payload.get("right_contract_id"):
+        contracts = [
+            {
+                "ContractID": payload.get("left_contract_id"),
+                "ContractNumber": payload.get("left_contract_number"),
+                "ContractName": payload.get("left_contract_name"),
+                "ContractType": payload.get("left_contract_type"),
+                "SupplierName": payload.get("left_supplier_name"),
+                "AnnualContractValue": payload.get("left_annual_cost"),
+            },
+            {
+                "ContractID": payload.get("right_contract_id"),
+                "ContractNumber": payload.get("right_contract_number"),
+                "ContractName": payload.get("right_contract_name"),
+                "ContractType": payload.get("right_contract_type"),
+                "SupplierName": payload.get("right_supplier_name"),
+                "AnnualContractValue": payload.get("right_annual_cost"),
+            },
+        ]
+        # Prefer full matrix from pairwise result when available.
+        if payload.get("field_matrix"):
+            pass
+        payload = {**payload, "contracts": contracts}
+
+    if len(contracts) < 2:
+        return "Contract comparison failed: fewer than two contracts resolved."
+
+    ids = [str(row.get("ContractID")) for row in contracts]
+    header_cols = " | ".join(_md_cell(cid) for cid in ids)
+
     lines = [
-        f"Contract comparison: {left_id} vs {right_id}",
-        f"Fields compared: {payload.get('fields_compared')}; "
-        f"matching: {payload.get('matching_field_count')}; "
-        f"differences: {payload.get('difference_count')}",
+        f"### Contract comparison ({len(contracts)}-way)",
+        "",
+        "#### Quantitative snapshot (Fabric SQL)",
+        "",
+        f"| Attribute | {header_cols} |",
+        "| --- | " + " | ".join(["---"] * len(ids)) + " |",
+        "| Contract Number | "
+        + " | ".join(_md_cell(row.get("ContractNumber")) for row in contracts)
+        + " |",
+        "| Contract Name | "
+        + " | ".join(_md_cell(row.get("ContractName")) for row in contracts)
+        + " |",
+        "| Supplier | "
+        + " | ".join(_md_cell(row.get("SupplierName")) for row in contracts)
+        + " |",
+        "| Contract Type | "
+        + " | ".join(_md_cell(row.get("ContractType")) for row in contracts)
+        + " |",
+        "| Status | "
+        + " | ".join(_md_cell(row.get("ContractStatus")) for row in contracts)
+        + " |",
+        "| Annual Cost | "
+        + " | ".join(_md_cell(row.get("AnnualContractValue")) for row in contracts)
+        + " |",
+        "| Total Value | "
+        + " | ".join(_md_cell(row.get("ContractValue")) for row in contracts)
+        + " |",
+        f"| Fields compared | {payload.get('fields_compared')} |",
+        f"| Matching fields | {payload.get('matching_field_count')} |",
+        f"| Differing fields | {payload.get('difference_count')} |",
+        "",
+        "#### Field matrix (differences first)",
+        "",
+        f"| Field | {header_cols} | Match? |",
+        "| --- | " + " | ".join(["---"] * len(ids)) + " | --- |",
     ]
-    for item in diffs[:limit]:
-        field = item.get("field")
+
+    matrix = payload.get("field_matrix") or []
+    if not matrix and payload.get("differences"):
+        # Build a mini-matrix from pairwise differences + matching fields.
+        left_id = str(payload.get("left_contract_id"))
+        right_id = str(payload.get("right_contract_id"))
+        for item in payload.get("differences") or []:
+            matrix.append(
+                {
+                    "field": item.get("field"),
+                    "all_match": False,
+                    "values": {
+                        left_id: item.get(left_id),
+                        right_id: item.get(right_id),
+                    },
+                }
+            )
+        for field in payload.get("matching_fields") or []:
+            matrix.append(
+                {
+                    "field": field,
+                    "all_match": True,
+                    "values": {left_id: "∅", right_id: "∅"},
+                }
+            )
+
+    # Show differing fields first for readability.
+    ordered_matrix = sorted(matrix, key=lambda row: (bool(row.get("all_match")), str(row.get("field"))))
+    shown = 0
+    for row in ordered_matrix:
+        if shown >= limit:
+            break
+        field = _md_cell(row.get("field"))
+        values = row.get("values") or {}
+        cells = " | ".join(_md_cell(values.get(cid)) for cid in ids)
+        match_flag = "Yes" if row.get("all_match") else "No"
+        # Skip sparse matching-only noise when many contracts; keep some matches.
+        if row.get("all_match") and shown > max(10, limit // 3):
+            continue
+        lines.append(f"| {field} | {cells} | {match_flag} |")
+        shown += 1
+    if len(ordered_matrix) > shown:
         lines.append(
-            f"- {field}: {item.get(str(left_id))} → {item.get(str(right_id))}"
+            f"| … | {' | '.join(['…'] * len(ids))} | {len(ordered_matrix) - shown} more rows omitted |"
         )
-    if len(diffs) > limit:
-        lines.append(f"... {len(diffs) - limit} more differences omitted")
-    lines.append("Source: Fabric SQL Gold (MCP compare_contracts)")
+
+    if risk_notes:
+        lines.extend(["", "#### Risk & liability signals (Azure AI Search)", ""])
+        for note in risk_notes[:8]:
+            lines.append(f"- {note}")
+
+    lines.extend(["", "Source: Fabric SQL Gold (MCP `compare_contracts`)"])
+    lines.append(_build_compare_recommendation(payload, risk_notes=risk_notes))
     return "\n".join(lines)
 
 
@@ -155,11 +510,14 @@ def _summarize_missing_payload(raw: str, limit: int = 20) -> str:
         return f"Missing-field check:\n{raw[:2000]}"
 
     if payload.get("not_found"):
-        return f"No contract found for ref `{payload.get('contract_ref')}`."
+        return (
+            f"No contracts matched filters `{payload.get('criteria')}`."
+        )
 
     incomplete = payload.get("incomplete_contracts") or []
     lines = [
         "Missing contract information check",
+        f"Filters: {payload.get('criteria') or {}}",
         f"Evaluated: {payload.get('contracts_evaluated')}; "
         f"complete: {payload.get('complete_count')}; "
         f"incomplete: {payload.get('incomplete_count')}",
@@ -167,8 +525,8 @@ def _summarize_missing_payload(raw: str, limit: int = 20) -> str:
     ]
     for row in incomplete[:limit]:
         lines.append(
-            f"- {row.get('ContractID')} ({row.get('ContractName')}): "
-            f"missing {', '.join(row.get('missing_fields') or [])}"
+            f"- {row.get('ContractID')} / {row.get('SupplierName')} / "
+            f"{row.get('ContractName')}: missing {', '.join(row.get('missing_fields') or [])}"
         )
     if len(incomplete) > limit:
         lines.append(f"... {len(incomplete) - limit} more incomplete contracts omitted")
@@ -182,6 +540,271 @@ def _extract_contract_ids(text: str) -> list[str]:
     return list(dict.fromkeys(_CONTRACT_ID_RE.findall(text)))
 
 
+def _extract_suppliers(text: str) -> list[str]:
+    return list(dict.fromkeys(m.group(0) for m in _SUPPLIER_RE.finditer(text)))
+
+
+def _extract_contract_types(text: str) -> list[str]:
+    return list(dict.fromkeys(m.group(1) for m in _CONTRACT_TYPE_RE.finditer(text)))
+
+
+def _extract_annual_costs(text: str) -> list[float]:
+    values: list[float] = []
+    for match in _ANNUAL_COST_RE.finditer(text):
+        try:
+            values.append(float(match.group(1).replace(",", "")))
+        except ValueError:
+            continue
+    # Compare prompts often mix labeled + bare amounts:
+    # "compare annual cost 41666.67 vs 50000"
+    if re.search(r"\b(annual|cost|acv|value)\b", text, re.I):
+        for match in re.finditer(r"\b(\d{4,}(?:\.\d+)?)\b", text):
+            try:
+                values.append(float(match.group(1).replace(",", "")))
+            except ValueError:
+                continue
+    return list(dict.fromkeys(values))
+
+
+def _extract_contract_names(text: str) -> list[str]:
+    names: list[str] = []
+    for match in _CONTRACT_NAME_RE.finditer(text):
+        name = match.group(1).strip().rstrip(".,;:")
+        if name:
+            names.append(name)
+    # Also catch quoted names.
+    for match in re.finditer(r"[\"']([^\"']{4,})[\"']", text):
+        names.append(match.group(1).strip())
+    return list(dict.fromkeys(names))
+
+
+def _criteria_from_parts(
+    *,
+    contract_ref: str | None = None,
+    supplier_name: str | None = None,
+    contract_name: str | None = None,
+    contract_type: str | None = None,
+    annual_cost: float | None = None,
+) -> dict[str, Any]:
+    criteria: dict[str, Any] = {}
+    if contract_ref:
+        criteria["contract_ref"] = contract_ref
+    if supplier_name:
+        criteria["supplier_name"] = supplier_name
+    if contract_name:
+        criteria["contract_name"] = contract_name
+    if contract_type:
+        criteria["contract_type"] = contract_type
+    if annual_cost is not None:
+        criteria["annual_cost"] = annual_cost
+    return criteria
+
+
+def _split_compare_sides(text: str) -> tuple[str, str] | None:
+    parts = [part.strip() for part in _COMPARE_SPLIT_RE.split(text) if part.strip()]
+    # Prefer splits that look like "... compare X vs Y"
+    if len(parts) >= 2:
+        return parts[-2], parts[-1]
+    return None
+
+
+def _lifecycle_red_flag_audit(missing_raw: str, search_raw: str | None = None) -> str:
+    findings: list[str] = []
+    try:
+        missing = json.loads(missing_raw)
+    except json.JSONDecodeError:
+        missing = {}
+    for row in (missing.get("incomplete_contracts") or [])[:8]:
+        gaps = ", ".join(row.get("missing_fields") or []) or "unspecified gaps"
+        findings.append(
+            f"| High | {row.get('ContractID')} / {row.get('SupplierName')} | "
+            f"Missing required commercial fields: {gaps} | Fabric SQL |"
+        )
+    clause_hits = 0
+    if search_raw:
+        try:
+            search = json.loads(search_raw)
+            docs = search.get("documents") or []
+            clause_hits = len(docs)
+            if clause_hits == 0:
+                findings.append(
+                    "| High | Clause corpus | No liability/indemnification/SLA snippets returned | Azure AI Search |"
+                )
+            else:
+                findings.append(
+                    f"| Medium | Clause corpus | {clause_hits} document hits for liability/SLA language — review for one-sided indemnification or weak SLAs | Azure AI Search |"
+                )
+        except json.JSONDecodeError:
+            findings.append(
+                "| Medium | Clause corpus | Search payload unreadable; treat legal risk as unverified | Azure AI Search |"
+            )
+
+    if not findings:
+        findings.append(
+            "| Low | Scan | No incomplete-field or clause gaps detected in current tool output | Orchestrator |"
+        )
+
+    counter_lines = [
+        "",
+        "## Dynamic Counter-Clause Drafting",
+        "",
+        "Proposed fallback language (draft — Legal review required):",
+        "",
+        "1. **Limitation of Liability** — Cap each party's aggregate liability at 12 months of fees "
+        "paid under the agreement, excluding fraud, gross negligence, IP infringement, and "
+        "confidentiality breaches.",
+        "2. **Mutual Indemnification** — Each party indemnifies the other for third-party claims "
+        "arising from its negligence, willful misconduct, or violation of law; vendor additionally "
+        "indemnifies for IP infringement claims tied to delivered services.",
+        "3. **SLA Credits** — Define measurable uptime (≥99.9%) with service credits up to 10% of "
+        "monthly fees; credits are the exclusive remedy for SLA failure unless chronic breach.",
+        "4. **Termination for Convenience** — Allow customer termination with 30 days' notice and "
+        "payment only for services rendered through the effective termination date.",
+        "",
+        "Action: route High findings to Legal within 5 business days; do not execute renewals until "
+        "fallback language is negotiated or risk is formally accepted.",
+    ]
+
+    return "\n".join(
+        [
+            "## Red-Flag Compliance Audit",
+            "",
+            "| Severity | Subject | Finding | Source |",
+            "| --- | --- | --- | --- |",
+            *findings,
+            "",
+            "Actionable next steps:",
+            "- Quarantine High-severity agreements from auto-renew until Legal signs off.",
+            "- Open a vendor remediation ticket for each missing liability/SLA control.",
+            "- Re-scan with `search_cloud_blob_contracts` after amendment upload.",
+            *counter_lines,
+        ]
+    )
+
+
+def _lifecycle_financial_exposure(
+    spend_raw: str | None,
+    expiring_raw: str | None = None,
+    search_note: str | None = None,
+) -> str:
+    annual = None
+    supplier = None
+    try:
+        spend = json.loads(spend_raw or "{}")
+        rows = spend.get("rows") or []
+        if rows:
+            annual = rows[0].get("TotalAnnualContractValue") or rows[0].get("AnnualContractValue")
+            supplier = rows[0].get("SupplierName")
+    except json.JSONDecodeError:
+        spend = {}
+
+    remaining_years = 1.0
+    try:
+        expiring = json.loads(expiring_raw or "{}")
+        erows = expiring.get("rows") or []
+        if erows and erows[0].get("ExpirationDate") and erows[0].get("EffectiveDate"):
+            life = _lifecycle_days(erows[0].get("EffectiveDate"), erows[0].get("ExpirationDate"))
+            if life and life > 0:
+                remaining_years = max(life / 365.0, 0.25)
+    except Exception:  # noqa: BLE001
+        pass
+
+    annual_n = _as_number(annual) or 0.0
+    low = annual_n * 0.1 * remaining_years
+    base = annual_n * 0.25 * remaining_years
+    high = annual_n * 1.0 * remaining_years
+    label = supplier or "selected vendor"
+    assumptions = [
+        f"Baseline annual commercial value ≈ {annual_n} for {label} (Fabric SQL).",
+        f"Modeled remaining exposure window ≈ {remaining_years:.2f} years from effective/expiration signals.",
+        "Low/base/high use 10%/25%/100% of annualized value as proxy multipliers when penalty caps are unclear.",
+    ]
+    if search_note:
+        assumptions.append(search_note)
+
+    return "\n".join(
+        [
+            "## Financial Exposure Projection",
+            "",
+            f"| Scenario | Estimated exposure ({label}) |",
+            "| --- | --- |",
+            f"| Low | {low:,.2f} |",
+            f"| Base | {base:,.2f} |",
+            f"| High | {high:,.2f} |",
+            "",
+            "Assumptions:",
+            *[f"- {item}" for item in assumptions],
+            "",
+            "Actionable cost-control recommendations:",
+            "- Negotiate an explicit liability cap tied to 12 months of fees before renewal.",
+            "- Require amendment of uncapped indemnities; otherwise escalate for risk acceptance.",
+            "- If High scenario exceeds internal risk appetite, pause auto-renew and rebid scope.",
+        ]
+    )
+
+
+def _lifecycle_renewal_strategy(expiring_raw: str, spend_raw: str | None = None) -> str:
+    try:
+        expiring = json.loads(expiring_raw)
+    except json.JSONDecodeError:
+        expiring = {}
+    rows = expiring.get("rows") or []
+    spend_by_supplier: dict[str, float] = {}
+    try:
+        spend = json.loads(spend_raw or "{}")
+        for row in spend.get("rows") or []:
+            name = str(row.get("SupplierName") or "")
+            spend_by_supplier[name.lower()] = float(
+                row.get("TotalAnnualContractValue")
+                or row.get("AnnualContractValue")
+                or 0
+            )
+    except Exception:  # noqa: BLE001
+        pass
+
+    lines = [
+        "## Proactive Renewal Strategy Sheet",
+        "",
+        "| Contract | Supplier | Expiry | Spend signal | Recommended action |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    checklist: list[str] = []
+    for row in rows[:10]:
+        supplier = str(row.get("SupplierName") or "Unknown")
+        cid = str(row.get("ContractID") or "—")
+        expiry = str(row.get("ExpirationDate") or "—")
+        annual = _as_number(row.get("AnnualContractValue")) or spend_by_supplier.get(supplier.lower())
+        status = str(row.get("ContractStatus") or "").lower()
+        auto = row.get("AutoRenewalFlag")
+        spend_signal = f"{annual}" if annual is not None else "n/a"
+        if status in {"expired", "terminated"}:
+            action = "Terminate / transition"
+        elif auto is True and (annual or 0) >= 100000:
+            action = "Renegotiate pricing caps + liability"
+        elif auto is True:
+            action = "Auto-renew with SLA/liability review"
+        else:
+            action = "Renegotiate before term end"
+        lines.append(
+            f"| {cid} | {supplier} | {expiry} | {spend_signal} | {action} |"
+        )
+        checklist.append(f"{cid}: execute `{action}` and confirm notice-period compliance.")
+
+    if not rows:
+        lines.append("| — | — | — | — | No expiring rows returned |")
+
+    lines.extend(
+        [
+            "",
+            "Procurement execution checklist:",
+            *[f"- {item}" for item in checklist[:8]],
+            "- Confirm auto-renew notice dates and freeze PO increases pending decision.",
+            "- Attach Red-Flag Compliance Audit output to the renewal packet.",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def _choose_tools(user_text: str) -> list[str]:
     text = user_text.strip()
     chosen: list[str] = []
@@ -189,11 +812,15 @@ def _choose_tools(user_text: str) -> list[str]:
         chosen.append("compare_contracts")
     if _MISSING_RE.search(text):
         chosen.append("check_missing_contract_fields")
-    if _EXPIRE_RE.search(text):
+        chosen.append("search_cloud_blob_contracts")
+    if _EXPIRE_RE.search(text) or _RENEWAL_RE.search(text):
         chosen.append("get_expiring_contracts")
-    if _SPEND_RE.search(text):
         chosen.append("get_vendor_spend_summary")
-    # Avoid generic document search when the user clearly asked for compare/missing analytics.
+    if _SPEND_RE.search(text) or _EXPOSURE_RE.search(text):
+        chosen.append("get_vendor_spend_summary")
+    if _EXPOSURE_RE.search(text):
+        chosen.append("search_cloud_blob_contracts")
+        chosen.append("get_expiring_contracts")
     if _SEARCH_RE.search(text) or (
         "contract" in text.lower()
         and "compare_contracts" not in chosen
@@ -211,6 +838,17 @@ async def run_offline_turn(user_text: str) -> str:
     tools = _tool_map(await bridge.get_tools())
     selected = _choose_tools(user_text)
     contract_ids = _extract_contract_ids(user_text)
+    suppliers = _extract_suppliers(user_text)
+    contract_types = _extract_contract_types(user_text)
+    annual_costs = _extract_annual_costs(user_text)
+    contract_names = _extract_contract_names(user_text)
+    shared_filters = _criteria_from_parts(
+        contract_ref=contract_ids[0] if len(contract_ids) == 1 else None,
+        supplier_name=suppliers[0] if len(suppliers) == 1 else None,
+        contract_name=contract_names[0] if len(contract_names) == 1 else None,
+        contract_type=contract_types[0] if len(contract_types) == 1 else None,
+        annual_cost=annual_costs[0] if len(annual_costs) == 1 else None,
+    )
     sections: list[str] = []
 
     for name in selected:
@@ -220,32 +858,232 @@ async def run_offline_turn(user_text: str) -> str:
             continue
         try:
             if name == "get_expiring_contracts":
-                raw = await _ainvoke_tool(tool, days_ahead=365, max_rows=25)
+                raw = await _ainvoke_tool(
+                    tool,
+                    days_ahead=365,
+                    max_rows=25,
+                    **shared_filters,
+                )
                 sections.append(_summarize_sql_payload(raw, title="Expiring contracts"))
+                spend_raw = None
+                spend_tool = tools.get("get_vendor_spend_summary")
+                if spend_tool:
+                    spend_filters = {
+                        key: shared_filters[key]
+                        for key in ("supplier_name", "contract_type", "annual_cost")
+                        if key in shared_filters
+                    }
+                    spend_raw = await _ainvoke_tool(spend_tool, max_rows=25, **spend_filters)
+                if _EXPIRE_RE.search(user_text) or _RENEWAL_RE.search(user_text):
+                    sections.append(_lifecycle_renewal_strategy(raw, spend_raw))
+                if _EXPOSURE_RE.search(user_text):
+                    sections.append(_lifecycle_financial_exposure(spend_raw, raw))
             elif name == "get_vendor_spend_summary":
-                raw = await _ainvoke_tool(tool, max_rows=25)
+                spend_filters = {
+                    key: shared_filters[key]
+                    for key in ("supplier_name", "contract_type", "annual_cost")
+                    if key in shared_filters
+                }
+                raw = await _ainvoke_tool(tool, max_rows=25, **spend_filters)
                 sections.append(_summarize_sql_payload(raw, title="Vendor spend summary"))
+                if _EXPOSURE_RE.search(user_text) and "Financial Exposure Projection" not in "\n".join(
+                    sections
+                ):
+                    sections.append(_lifecycle_financial_exposure(raw, None))
             elif name == "compare_contracts":
+                compare_kwargs: dict[str, Any] = {}
                 if len(contract_ids) >= 2:
-                    a, b = contract_ids[0], contract_ids[1]
+                    compare_kwargs["contract_refs"] = ",".join(contract_ids)
+                elif len(suppliers) >= 2:
+                    compare_kwargs["supplier_names"] = ",".join(suppliers)
+                elif len(contract_names) >= 2:
+                    compare_kwargs["contract_names"] = ",".join(contract_names)
+                elif len(contract_types) >= 2:
+                    compare_kwargs["contract_types"] = ",".join(contract_types)
+                elif len(annual_costs) >= 2:
+                    compare_kwargs["annual_costs"] = ",".join(str(v) for v in annual_costs)
                 else:
-                    # Deterministic staging default when IDs are omitted.
-                    a, b = "CON-0001", "CON-0002"
+                    sides = _split_compare_sides(user_text)
+                    if sides:
+                        # Fall back to pairwise extraction across split segments.
+                        left_suppliers = _extract_suppliers(sides[0])
+                        right_suppliers = _extract_suppliers(sides[1])
+                        left_ids = _extract_contract_ids(sides[0])
+                        right_ids = _extract_contract_ids(sides[1])
+                        left_names = _extract_contract_names(sides[0])
+                        right_names = _extract_contract_names(sides[1])
+                        left_types = _extract_contract_types(sides[0])
+                        right_types = _extract_contract_types(sides[1])
+                        left_costs = _extract_annual_costs(sides[0])
+                        right_costs = _extract_annual_costs(sides[1])
+                        if left_ids or right_ids:
+                            refs = [*left_ids, *right_ids]
+                            if len(refs) >= 2:
+                                compare_kwargs["contract_refs"] = ",".join(refs)
+                        elif left_suppliers or right_suppliers:
+                            names = [*left_suppliers, *right_suppliers]
+                            if len(names) >= 2:
+                                compare_kwargs["supplier_names"] = ",".join(names)
+                        elif left_names or right_names:
+                            cnames = [*left_names, *right_names]
+                            if len(cnames) >= 2:
+                                compare_kwargs["contract_names"] = ",".join(cnames)
+                        elif left_types or right_types:
+                            ctypes = [*left_types, *right_types]
+                            if len(ctypes) >= 2:
+                                compare_kwargs["contract_types"] = ",".join(ctypes)
+                        elif left_costs or right_costs:
+                            costs = [*left_costs, *right_costs]
+                            if len(costs) >= 2:
+                                compare_kwargs["annual_costs"] = ",".join(str(v) for v in costs)
+
+                if not compare_kwargs:
+                    compare_kwargs = {
+                        "contract_refs": "CON-0001,CON-0002",
+                    }
                     sections.append(
-                        "No two contract IDs detected in the prompt; "
-                        f"defaulting comparison to {a} vs {b}."
+                        "No two resolvable compare sides detected; "
+                        "defaulting comparison to CON-0001 vs CON-0002."
                     )
-                raw = await _ainvoke_tool(tool, contract_id_a=a, contract_id_b=b)
-                sections.append(_summarize_compare_payload(raw))
+                raw = await _ainvoke_tool(tool, **compare_kwargs)
+
+                # Enrich compare with spend + clause search (orchestrator layer only).
+                risk_notes: list[str] = []
+                try:
+                    compare_payload = json.loads(raw)
+                except json.JSONDecodeError:
+                    compare_payload = {}
+                contract_rows = compare_payload.get("contracts") or []
+                if len(contract_rows) < 2 and compare_payload.get("left_contract_id"):
+                    contract_rows = [
+                        {
+                            "ContractID": compare_payload.get("left_contract_id"),
+                            "SupplierName": compare_payload.get("left_supplier_name"),
+                        },
+                        {
+                            "ContractID": compare_payload.get("right_contract_id"),
+                            "SupplierName": compare_payload.get("right_supplier_name"),
+                        },
+                    ]
+                spend_tool = tools.get("get_vendor_spend_summary")
+                search_tool = tools.get("search_cloud_blob_contracts")
+                for row in contract_rows:
+                    supplier = row.get("SupplierName")
+                    label = row.get("ContractID")
+                    if spend_tool and supplier:
+                        await _ainvoke_tool(
+                            spend_tool, max_rows=5, supplier_name=str(supplier)
+                        )
+                        risk_notes.append(
+                            f"Historical spend context for {supplier} retrieved via "
+                            f"get_vendor_spend_summary (Fabric SQL)."
+                        )
+                    if search_tool and supplier:
+                        query = (
+                            f"{supplier} liability indemnification termination notice "
+                            f"cap limitation of liability"
+                        )
+                        search_raw = await _ainvoke_tool(
+                            search_tool,
+                            query=query,
+                            top=3,
+                            supplier_name=str(supplier),
+                        )
+                        try:
+                            search_payload = json.loads(search_raw)
+                            docs = search_payload.get("documents") or []
+                            if docs:
+                                snippet = str(
+                                    docs[0].get("content") or docs[0].get("title") or ""
+                                ).replace("\n", " ")[:180]
+                                risk_notes.append(
+                                    f"{label}/{supplier} clause scan: {snippet} "
+                                    "(Azure AI Search)."
+                                )
+                            else:
+                                risk_notes.append(
+                                    f"{label}/{supplier}: no liability/termination clauses "
+                                    "returned by Azure AI Search; legal risk remains unverified."
+                                )
+                        except json.JSONDecodeError:
+                            risk_notes.append(
+                                f"{label}/{supplier}: clause search returned non-JSON payload."
+                            )
+
+                sections.append(
+                    _summarize_compare_payload(raw, risk_notes=risk_notes)
+                )
             elif name == "check_missing_contract_fields":
-                kwargs: dict[str, Any] = {"max_rows": 100}
-                if contract_ids:
-                    kwargs["contract_id"] = contract_ids[0]
-                raw = await _ainvoke_tool(tool, **kwargs)
+                raw = await _ainvoke_tool(tool, max_rows=100, **shared_filters)
                 sections.append(_summarize_missing_payload(raw))
+                search_raw = None
+                search_tool = tools.get("search_cloud_blob_contracts")
+                if search_tool and "search_cloud_blob_contracts" in selected:
+                    # Prefer the search result already scheduled later; fetch now for audit.
+                    audit_query = (
+                        "liability limitation indemnification SLA service level "
+                        "termination notice"
+                    )
+                    if contract_ids:
+                        audit_query = f"{contract_ids[0]} {audit_query}"
+                    elif suppliers:
+                        audit_query = f"{suppliers[0]} {audit_query}"
+                    search_raw = await _ainvoke_tool(
+                        search_tool,
+                        query=audit_query,
+                        top=20,
+                        **shared_filters,
+                    )
+                if _MISSING_RE.search(user_text):
+                    sections.append(_lifecycle_red_flag_audit(raw, search_raw))
+                if _EXPOSURE_RE.search(user_text):
+                    spend_tool = tools.get("get_vendor_spend_summary")
+                    spend_raw = None
+                    if spend_tool:
+                        spend_filters = {
+                            key: shared_filters[key]
+                            for key in ("supplier_name", "contract_type", "annual_cost")
+                            if key in shared_filters
+                        }
+                        spend_raw = await _ainvoke_tool(
+                            spend_tool, max_rows=25, **spend_filters
+                        )
+                    if "Financial Exposure Projection" not in "\n".join(sections):
+                        sections.append(
+                            _lifecycle_financial_exposure(
+                                spend_raw,
+                                None,
+                                search_note=(
+                                    "Clause gaps from compliance audit increase modeled "
+                                    "exposure when liability caps are absent."
+                                ),
+                            )
+                        )
             elif name == "search_cloud_blob_contracts":
-                raw = await _ainvoke_tool(tool, query=user_text, top=20)
+                # Skip duplicate search when missing-field audit already fetched clauses.
+                if (
+                    "check_missing_contract_fields" in selected
+                    and _MISSING_RE.search(user_text)
+                    and any(
+                        "## Red-Flag Compliance Audit" in s for s in sections
+                    )
+                ):
+                    continue
+                raw = await _ainvoke_tool(
+                    tool,
+                    query=user_text,
+                    top=20,
+                    **shared_filters,
+                )
                 sections.append(_summarize_search_payload(raw, query=user_text, limit=20))
+                if _MISSING_RE.search(user_text) and not any(
+                    "## Red-Flag Compliance Audit" in s for s in sections
+                ):
+                    # Clause-only audit path (no missing-field tool selected).
+                    empty_missing = json.dumps(
+                        {"incomplete_contracts": [], "checked_count": 0}
+                    )
+                    sections.append(_lifecycle_red_flag_audit(empty_missing, raw))
             else:
                 raw = await _ainvoke_tool(tool)
                 sections.append(f"`{name}` result:\n{raw[:2000]}")

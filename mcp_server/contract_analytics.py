@@ -471,3 +471,71 @@ def check_missing_fields_in_rows(
         "not_found": bool(effective) and len(target_rows) == 0,
         "incomplete_contracts": incomplete,
     }
+
+
+PROFILE_REQUIRED_FIELDS: tuple[str, ...] = DEFAULT_REQUIRED_FIELDS + (
+    "RenewalDate",
+)
+
+
+def _payment_terms_days(row: dict[str, Any]) -> Any:
+    if not _is_missing(row.get("PaymentTermsDays")):
+        return row.get("PaymentTermsDays")
+    if not _is_missing(row.get("NoticePeriodDays")):
+        return row.get("NoticePeriodDays")
+    return None
+
+
+def _rate_card_on_file(row: dict[str, Any]) -> bool:
+    value = row.get("RateCardOnFile")
+    if isinstance(value, bool):
+        return value
+    if _is_missing(value):
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def normalize_contract_search_row(row: dict[str, Any]) -> dict[str, Any]:
+    """Stable structured search projection (snake_case)."""
+    return {
+        "contract_id": row.get("ContractID"),
+        "contract_number": row.get("ContractNumber"),
+        "vendor_name": row.get("SupplierName"),
+        "business_unit": row.get("BusinessUnit"),
+        "contract_type": row.get("ContractType"),
+        "status": row.get("ContractStatus"),
+        "effective_date": row.get("EffectiveDate"),
+        "expiration_date": row.get("ExpirationDate"),
+        "renewal_date": row.get("RenewalDate"),
+        "annual_contract_value": row.get("AnnualContractValue"),
+        "currency": row.get("Currency"),
+        "rate_card_on_file": _rate_card_on_file(row),
+        "payment_terms_days": _payment_terms_days(row),
+        "source": "synthetic_gold_contracts",
+    }
+
+
+def normalize_contract_profile(row: dict[str, Any]) -> dict[str, Any]:
+    """Full normalized profile for one contract, including missing_fields."""
+    missing = [
+        field for field in PROFILE_REQUIRED_FIELDS if _is_missing(row.get(field))
+    ]
+    return {
+        "contract_id": row.get("ContractID"),
+        "contract_number": row.get("ContractNumber"),
+        "vendor_name": row.get("SupplierName"),
+        "business_unit": row.get("BusinessUnit"),
+        "contract_type": row.get("ContractType"),
+        "status": row.get("ContractStatus"),
+        "effective_date": row.get("EffectiveDate"),
+        "expiration_date": row.get("ExpirationDate"),
+        "renewal_date": row.get("RenewalDate"),
+        "contract_owner": row.get("ContractOwner"),
+        "annual_contract_value": row.get("AnnualContractValue"),
+        "currency": row.get("Currency"),
+        "payment_terms_days": _payment_terms_days(row),
+        "rate_card_on_file": _rate_card_on_file(row),
+        "supplier_risk_rating": row.get("SupplierRiskRating"),
+        "missing_fields": missing,
+        "source": "synthetic_gold_contracts",
+    }

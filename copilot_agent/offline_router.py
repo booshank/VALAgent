@@ -56,8 +56,16 @@ _DOC_SEARCH_RE = re.compile(
 )
 _STRUCTURED_SEARCH_RE = re.compile(
     r"\b(show\s+contracts?|list\s+contracts?|find\s+contracts?|search\s+contracts?|"
-    r"contracts?\s+for|overlapping\s+contracts?|unusual\s+payment\s+terms?|high\s+rates?|"
-    r"rate\s+card)\b",
+    r"contracts?\s+for)\b",
+    re.I,
+)
+_OVERLAP_RE = re.compile(
+    r"\b(overlap\w*|overlapping\s+contracts?|concurrent\s+contracts?)\b",
+    re.I,
+)
+_RISK_RE = re.compile(
+    r"\b(unusual\s+payment\s+terms?|high\s+rates?|rate\s+card|contract\s+risk|"
+    r"explain\s+risk|risk\s+review|high\s+supplier\s+risk)\b",
     re.I,
 )
 _PROFILE_RE = re.compile(
@@ -850,22 +858,30 @@ def _choose_tools(user_text: str) -> list[str]:
     chosen: list[str] = []
     if _COMPARE_RE.search(text):
         chosen.append("compare_contracts")
+    if _OVERLAP_RE.search(text):
+        chosen.append("find_overlaps")
+    if _RISK_RE.search(text):
+        chosen.append("explain_contract_risk")
     if _PROFILE_RE.search(text) or (
         _CONTRACT_ID_RE.search(text)
         and re.search(r"\b(detail|profile|show)\b", text, re.I)
         and not _COMPARE_RE.search(text)
     ):
         chosen.append("get_contract_profile")
-    if _STRUCTURED_SEARCH_RE.search(text) or (
-        re.search(r"\bcontracts?\b", text, re.I)
-        and _SUPPLIER_RE.search(text)
-        and "compare_contracts" not in chosen
-        and "get_contract_profile" not in chosen
-    ):
-        chosen.append("search_contracts")
+    if "find_overlaps" not in chosen and "explain_contract_risk" not in chosen:
+        if _STRUCTURED_SEARCH_RE.search(text) or (
+            re.search(r"\bcontracts?\b", text, re.I)
+            and _SUPPLIER_RE.search(text)
+            and "compare_contracts" not in chosen
+            and "get_contract_profile" not in chosen
+        ):
+            chosen.append("search_contracts")
     if _MISSING_RE.search(text):
         chosen.append("check_missing_contract_fields")
-        if "search_contracts" not in chosen:
+        if (
+            "search_contracts" not in chosen
+            and "explain_contract_risk" not in chosen
+        ):
             chosen.append("search_contracts")
     if _EXPIRE_RE.search(text) or (
         _RENEWAL_RE.search(text) and not _MISSING_RE.search(text)
@@ -938,6 +954,69 @@ def _summarize_contract_profile(raw: str) -> str:
         f"- missing_fields: {', '.join(missing) if missing else '(none)'}",
         "Source: synthetic_gold_contracts (MCP get_contract_profile)",
     ]
+    return "\n".join(lines)
+
+
+def _summarize_overlaps(raw: str, *, limit: int = 15) -> str:
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return f"Overlap scan\n{raw[:2000]}"
+    rows = payload.get("rows") or []
+    lines = [
+        f"Overlapping contracts ({payload.get('row_count', len(rows))} pairs)",
+        f"Filters: {payload.get('criteria')}",
+    ]
+    for row in rows[:limit]:
+        lines.append(
+            f"- {row.get('vendor')} | {row.get('contract_a')} vs {row.get('contract_b')} | "
+            f"{row.get('overlap_start')} → {row.get('overlap_end')} | {row.get('why_flagged')}"
+        )
+    if not rows:
+        lines.append("- No same-vendor effective→expiration overlaps found.")
+    lines.append("Source: synthetic_gold_contracts (MCP find_overlaps)")
+    return "\n".join(lines)
+
+
+def _summarize_risk_explanations(raw: str, *, limit: int = 8) -> str:
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return f"Contract risk explanation\n{raw[:2000]}"
+    explanations = payload.get("explanations") or []
+    lines = [
+        f"Contract risk explanations ({payload.get('row_count', len(explanations))} contracts)",
+        f"Filters: {payload.get('criteria')} | as_of={payload.get('as_of')}",
+        f"Thresholds: {payload.get('thresholds')}",
+    ]
+    for item in explanations[:limit]:
+        facts = item.get("known_facts") or {}
+        risks = item.get("computed_risks") or []
+        missing = item.get("missing_data") or []
+        lines.append(f"### {item.get('contract_id')} / {facts.get('vendor_name')}")
+        lines.append("known_facts:")
+        lines.append(
+            f"- ACV={facts.get('annual_contract_value')} {facts.get('currency')}; "
+            f"payment_terms_days={facts.get('payment_terms_days')}; "
+            f"rate_card_on_file={facts.get('rate_card_on_file')}; "
+            f"risk_rating={facts.get('supplier_risk_rating')}; "
+            f"expires={facts.get('expiration_date')}; renewal={facts.get('renewal_date')}"
+        )
+        lines.append("computed_risks:")
+        if risks:
+            for risk in risks:
+                lines.append(
+                    f"- [{risk.get('severity')}] {risk.get('code')}: {risk.get('detail')}"
+                )
+        else:
+            lines.append("- (none)")
+        lines.append(
+            f"missing_data: {', '.join(missing) if missing else '(none)'}"
+        )
+        lines.append(
+            f"recommended_review_action: {item.get('recommended_review_action')}"
+        )
+    lines.append("Source: synthetic_gold_contracts (MCP explain_contract_risk)")
     return "\n".join(lines)
 
 
@@ -1138,50 +1217,27 @@ async def run_offline_turn(user_text: str) -> str:
                     max_rows=50,
                 )
                 sections.append(_summarize_search_contracts(raw))
-                # Highlight overlaps / unusual terms when asked.
-                try:
-                    payload = json.loads(raw)
-                    rows = payload.get("rows") or []
-                except json.JSONDecodeError:
-                    rows = []
-                if re.search(r"\boverlap", user_text, re.I) and rows:
-                    by_vendor: dict[str, list[dict[str, Any]]] = {}
-                    for row in rows:
-                        by_vendor.setdefault(str(row.get("vendor_name") or "?"), []).append(row)
-                    overlap_notes = []
-                    for vendor_name, vrows in by_vendor.items():
-                        if len(vrows) >= 2:
-                            ids = ", ".join(str(r.get("contract_id")) for r in vrows[:6])
-                            overlap_notes.append(
-                                f"- {vendor_name}: {len(vrows)} active/listed contracts ({ids})"
-                            )
-                    if overlap_notes:
-                        sections.append(
-                            "Overlapping / multi-contract vendor signal:\n"
-                            + "\n".join(overlap_notes)
-                        )
-                if re.search(r"\b(unusual\s+payment|high\s+rate)", user_text, re.I) and rows:
-                    flagged = []
-                    for row in rows:
-                        terms = row.get("payment_terms_days")
-                        acv = row.get("annual_contract_value")
-                        try:
-                            terms_n = float(terms) if terms is not None else 0
-                        except (TypeError, ValueError):
-                            terms_n = 0
-                        try:
-                            acv_n = float(acv) if acv is not None else 0
-                        except (TypeError, ValueError):
-                            acv_n = 0
-                        if terms_n >= 60 or acv_n >= 200000 or row.get("rate_card_on_file") is False:
-                            flagged.append(
-                                f"- {row.get('contract_id')}: payment_terms_days={terms}, "
-                                f"ACV={acv}, rate_card_on_file={row.get('rate_card_on_file')}"
-                            )
-                    sections.append(
-                        "Unusual payment terms / high-rate flags:\n"
-                        + ("\n".join(flagged[:10]) if flagged else "- none above thresholds")
-                    )
+            elif name == "find_overlaps":
+                vendor = shared_filters.get("supplier_name")
+                if vendor and vendor.lower() == "alphatech":
+                    vendor = "AlphaTech Services"
+                raw = await _ainvoke_tool(
+                    tool,
+                    vendor=vendor,
+                    max_rows=200,
+                )
+                sections.append(_summarize_overlaps(raw))
+            elif name == "explain_contract_risk":
+                vendor = shared_filters.get("supplier_name")
+                if vendor and vendor.lower() == "alphatech":
+                    vendor = "AlphaTech Services"
+                cid = contract_ids[0] if len(contract_ids) == 1 else None
+                raw = await _ainvoke_tool(
+                    tool,
+                    contract_id=cid,
+                    vendor=vendor,
+                )
+                sections.append(_summarize_risk_explanations(raw))
             elif name == "get_contract_profile":
                 cid = contract_ids[0] if contract_ids else None
                 if not cid:
@@ -1237,7 +1293,12 @@ async def run_offline_turn(user_text: str) -> str:
                         )
             elif name == "search_cloud_blob_contracts":
                 # Prefer structured metadata tools for catalog questions.
-                if "search_contracts" in selected or "get_contract_profile" in selected:
+                if (
+                    "search_contracts" in selected
+                    or "get_contract_profile" in selected
+                    or "find_overlaps" in selected
+                    or "explain_contract_risk" in selected
+                ):
                     continue
                 # Skip duplicate search when missing-field audit already fetched clauses.
                 if (

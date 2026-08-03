@@ -135,43 +135,14 @@ from contract_analytics import (  # noqa: E402
     normalize_contract_search_row,
     resolve_contract,
 )
+from contract_repository import SOURCE_LABEL, get_contract_repository  # noqa: E402
+from contract_risk import explain_contract_risks, find_overlapping_contracts  # noqa: E402
 from fabric_sql import execute_query  # noqa: E402
 
 
 def _load_vendor_contracts(max_rows: int = 500) -> list[dict[str, Any]]:
-    """Fetch Gold vendor contracts for analytics tools."""
-    sql = """
-        SELECT
-            ContractID,
-            ContractNumber,
-            ContractName,
-            ContractType,
-            AgreementType,
-            ContractStatus,
-            SupplierID,
-            SupplierName,
-            ContractValue,
-            AnnualContractValue,
-            Currency,
-            EffectiveDate,
-            ExpirationDate,
-            RenewalDate,
-            AutoRenewalFlag,
-            BusinessUnit,
-            ContractOwner,
-            ParentContractID,
-            ParentContractNumber,
-            ContractVersion,
-            SupplierRiskRating,
-            NoticePeriodDays,
-            PaymentTermsDays,
-            RateCardOnFile,
-            ContractURL
-        FROM Gold_Vendor_Contracts
-    """
-    payload = execute_query(sql, max_rows=max_rows)
-    rows = payload.get("rows") or []
-    return [row for row in rows if isinstance(row, dict)]
+    """Fetch Gold vendor contracts via ContractRepository (Fabric / offline fixtures)."""
+    return get_contract_repository().list_all(max_rows=max_rows)
 
 
 def _rows_payload(rows: list[dict[str, Any]], *, criteria: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -695,24 +666,17 @@ def search_contracts(
     Returns:
         JSON string with criteria, row_count, and normalized contract rows.
     """
-    rows = _load_vendor_contracts(max_rows=500)
-    criteria = build_criteria(supplier_name=vendor, contract_type=contract_type)
-    filtered = filter_contracts(rows, criteria)
-    if business_unit and str(business_unit).strip():
-        needle = str(business_unit).strip().lower()
-        filtered = [
-            row
-            for row in filtered
-            if needle in str(row.get("BusinessUnit") or "").lower()
-        ]
-    if status and str(status).strip():
-        needle = str(status).strip().lower()
-        filtered = [
-            row
-            for row in filtered
-            if needle in str(row.get("ContractStatus") or "").lower()
-        ]
-    projected = [normalize_contract_search_row(row) for row in filtered[: max(1, int(max_rows))]]
+    repo = get_contract_repository()
+    filtered = repo.search(
+        {
+            "vendor": vendor,
+            "business_unit": business_unit,
+            "status": status,
+            "contract_type": contract_type,
+        },
+        max_rows=max(1, int(max_rows)),
+    )
+    projected = [normalize_contract_search_row(row) for row in filtered]
     return json.dumps(
         {
             "tool": "search_contracts",
@@ -724,7 +688,7 @@ def search_contracts(
             },
             "row_count": len(projected),
             "rows": projected,
-            "source": "synthetic_gold_contracts",
+            "source": SOURCE_LABEL,
         },
         default=str,
     )
@@ -746,19 +710,16 @@ def get_contract_profile(contract_id: str) -> str:
             {"error": "contract_id is required", "tool": "get_contract_profile"},
             default=str,
         )
-    rows = _load_vendor_contracts(max_rows=500)
-    resolved = resolve_contract(
-        rows, build_criteria(contract_ref=str(contract_id).strip())
-    )
-    contract = resolved.get("contract")
+    repo = get_contract_repository()
+    contract = repo.get_by_id(str(contract_id).strip())
     if contract is None:
         return json.dumps(
             {
                 "error": "Contract not found",
                 "tool": "get_contract_profile",
                 "contract_id": contract_id,
-                "match_count": resolved.get("match_count", 0),
-                "candidates": resolved.get("candidates", []),
+                "match_count": 0,
+                "candidates": [],
             },
             default=str,
         )
@@ -768,10 +729,64 @@ def get_contract_profile(contract_id: str) -> str:
             "tool": "get_contract_profile",
             "contract_id": profile.get("contract_id"),
             "profile": profile,
-            "source": "synthetic_gold_contracts",
+            "source": SOURCE_LABEL,
         },
         default=str,
     )
+
+
+@mcp.tool()
+def find_overlaps(
+    vendor: str | None = None,
+    business_unit: str | None = None,
+    max_rows: int = 200,
+) -> str:
+    """
+    Detect same-vendor contracts with overlapping effective→expiration windows.
+
+    Args:
+        vendor: Optional supplier/vendor name filter.
+        business_unit: Optional business unit filter.
+        max_rows: Maximum overlap pairs to return (default 200).
+
+    Returns:
+        JSON string of overlap rows: vendor, business_unit, contract_a/b,
+        overlap_start/end, why_flagged, source.
+    """
+    payload = find_overlapping_contracts(
+        get_contract_repository(),
+        vendor=vendor,
+        business_unit=business_unit,
+        max_rows=max_rows,
+    )
+    return json.dumps(payload, default=str)
+
+
+@mcp.tool()
+def explain_contract_risk(
+    contract_id: str | None = None,
+    vendor: str | None = None,
+) -> str:
+    """
+    Explain grounded commercial risks for one contract or a vendor portfolio.
+
+    Separates known_facts from computed_risks. Flags only data-supported issues:
+    missing renewal, missing rate card, expiring soon, unusual payment terms
+    (e.g. Net 90), high ACV outlier, high supplier risk, overlapping contracts.
+
+    Args:
+        contract_id: Optional single contract id.
+        vendor: Optional vendor filter when contract_id is omitted.
+
+    Returns:
+        JSON string with structured explanations.
+    """
+    payload = explain_contract_risks(
+        get_contract_repository(),
+        contract_id=contract_id,
+        vendor=vendor,
+    )
+    return json.dumps(payload, default=str)
 
 
 @mcp.tool()

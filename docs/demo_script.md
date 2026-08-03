@@ -66,10 +66,10 @@ This is **not** an Azure AI Foundry-first runtime.
 
 | Item | Detail |
 | --- | --- |
-| **Expected tool** | `search_contracts` (vendor filter / catalog) |
-| **Expected behavior** | Offline router highlights vendors with multiple concurrent contracts (AlphaTech C-1001 + C-1002 overlapping term). |
-| **Sample expected output** | Note that AlphaTech Services has multiple listed/active contracts (C-1001, C-1002, …). |
-| **Success looks like** | Overlap/multi-contract signal grounded in structured rows. |
+| **Expected tool** | `find_overlaps` |
+| **Expected behavior** | Same-vendor effective→expiration window overlaps from structured Gold data. |
+| **Sample expected output** | AlphaTech pair `C-1001` vs `C-1002` with overlap_start/overlap_end and why_flagged. |
+| **Success looks like** | Deliberate overlap cases returned with stable fields; source `synthetic_gold_contracts`. |
 
 ---
 
@@ -77,10 +77,10 @@ This is **not** an Azure AI Foundry-first runtime.
 
 | Item | Detail |
 | --- | --- |
-| **Expected tool** | `search_contracts` |
-| **Expected behavior** | Flags payment_terms_days ≥ 60, high ACV, or missing rate card. |
-| **Sample expected output** | C-1002 flagged (payment_terms_days=90, ACV=240000, rate_card_on_file=false). |
-| **Success looks like** | Explicit flagged IDs with thresholds; not invoice aging. |
+| **Expected tool** | `explain_contract_risk` |
+| **Expected behavior** | Structured known_facts / computed_risks / missing_data / recommended_review_action. No invented risks. |
+| **Sample expected output** | C-1002 includes unusual_payment_terms (Net 90), high_contract_value_outlier and/or missing_rate_card, plus overlapping_contract where applicable. |
+| **Success looks like** | Grounded risk explanation separating facts from computed flags. |
 
 ---
 

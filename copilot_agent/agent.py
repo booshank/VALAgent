@@ -47,10 +47,13 @@ Strict Cognitive Routing Boundary — choose tools by intent domain:
    “Invoice/spend data is not part of this synthetic contract intelligence POC. This requires a separate data-linkage POC.”
    Never present AnnualContractValue / contract-value rollups as invoice spend.
 
-1. Structured contract metadata search / profile
+1. Structured contract metadata search / profile / overlaps / risk
    → `search_contracts` (vendor/business_unit/status/contract_type filters)
    → `get_contract_profile` (one contract_id → full normalized profile + missing_fields)
-   Use these for “show contracts for …”, “details for contract …”, catalog lists.
+   → `find_overlaps` (same-vendor effective→expiration overlaps)
+   → `explain_contract_risk` (known_facts vs computed_risks; no invented risks)
+   Use these for “show contracts for …”, “details for contract …”, overlap, and
+   unusual payment / high-rate / risk questions.
 
 2. Relational / contract commercial metrics (NOT invoices)
    → `get_expiring_contracts`, `get_vendor_spend_summary`

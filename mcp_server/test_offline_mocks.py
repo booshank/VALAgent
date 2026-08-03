@@ -90,6 +90,20 @@ profile = json.loads(server.get_contract_profile("C-1001"))
 assert profile.get("profile", {}).get("contract_id") == "C-1001", profile
 assert "missing_fields" in profile.get("profile", {})
 
+overlaps = json.loads(server.find_overlaps(vendor="AlphaTech Services", max_rows=50))
+assert overlaps["row_count"] >= 1, overlaps
+pair_ids = {
+    (row.get("contract_a"), row.get("contract_b")) for row in overlaps["rows"]
+}
+assert ("C-1001", "C-1002") in pair_ids or ("C-1002", "C-1001") in pair_ids
+
+risk = json.loads(server.explain_contract_risk(contract_id="C-1002"))
+assert risk["row_count"] >= 1, risk
+exp = risk["explanations"][0]
+assert "known_facts" in exp and "computed_risks" in exp
+codes = {r.get("code") for r in exp["computed_risks"]}
+assert "unusual_payment_terms" in codes or "high_contract_value_outlier" in codes, codes
+
 print("offline interceptor OK")
 print(f"  expiring_rows={expiring['row_count']}")
 print(f"  spend_rows={spend['row_count']}")
@@ -98,6 +112,8 @@ print(f"  compare_diffs={compared['difference_count']}")
 print(f"  incomplete={missing['incomplete_count']}")
 print(f"  search_contracts={structured['row_count']}")
 print(f"  profile={profile['profile']['contract_id']}")
+print(f"  overlaps={overlaps['row_count']}")
+print(f"  risk_codes={sorted(codes)}")
 """
     proc = subprocess.run(
         [sys.executable, "-c", script],
@@ -123,6 +139,8 @@ def test_production_tools_have_no_mock_branches() -> None:
         "def search_cloud_blob_contracts",
         "def search_contracts",
         "def get_contract_profile",
+        "def find_overlaps",
+        "def explain_contract_risk",
     ]
     for marker in tool_markers:
         start = source.index(marker)

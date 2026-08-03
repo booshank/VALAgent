@@ -156,6 +156,7 @@ print(json.dumps({"codes": sorted(codes), "action": exp["recommended_review_acti
 def test_contract_repository_abstraction() -> None:
     out = _run_mcp_snippet(
         r"""
+import server  # activates offline interceptor before repository SQL access
 from contract_repository import FabricContractRepository, get_contract_repository
 repo = get_contract_repository()
 assert isinstance(repo, FabricContractRepository)

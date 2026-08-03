@@ -1,7 +1,13 @@
 # VAL CoPilot — Azure AI Foundry Deployment Guide
 
-Step-by-step procedure to provision the LangChain cognitive routing agent into
-Microsoft Azure AI Foundry using `copilot_agent/deploy_to_foundry.py`.
+> **Framing:** Azure AI Foundry is an **optional future host**, not the current
+> validated POC runtime. The Synthetic Contract Intelligence Tool-Layer POC runs
+> locally as **Streamlit → Flask cognitive router → FastMCP tools → synthetic Gold**
+> (`USE_OFFLINE_MOCKS=true`). Use this guide only when you intentionally want to
+> wrap the same MCP tools in a managed Foundry Agent.
+
+Step-by-step procedure to provision VAL CoPilot into Microsoft Azure AI Foundry
+using `copilot_agent/deploy_to_foundry.py`.
 
 **Audience:** Azure Cloud Architects / DevSecOps Engineers  
 **SDKs:** `azure-ai-projects==1.0.0` · `azure-ai-agents` · `azure-identity`
@@ -19,18 +25,33 @@ This guide is split into two parts:
 
 ## 1. Overview
 
-This guide deploys VAL CoPilot as a **managed Azure AI Foundry Agent**. The
-deployment script authenticates with Entra ID, wraps Fabric SQL and Azure AI
-Search MCP tools in a Foundry **FunctionTool / ToolSet**, and creates the agent
-using the existing multi-agent **SYSTEM_PROMPT** (compliance audits, red-flagging,
-financial exposure projections, and renewal strategy sheets).
+This guide optionally deploys VAL CoPilot as a **managed Azure AI Foundry Agent**
+that hosts the same cognitive instructions and MCP tool surface used by the local
+tool-layer POC. The deployment script authenticates with Entra ID, wraps MCP tool
+implementations in a Foundry **FunctionTool / ToolSet**, and creates the agent
+using **SYSTEM_PROMPT** (lifecycle procedures, invoice/spend OOS guardrail,
+comparative analysis → `## Recommendation`).
+
+### Current POC vs this Foundry path
+
+| Path | Host | Data | When to use |
+| --- | --- | --- | --- |
+| **Current POC (default)** | Streamlit + Flask + FastMCP | Synthetic fixtures | Demos, local validation, CI guards |
+| **Optional Foundry** | Managed Foundry Agent + same tools | Fixtures or Fabric/Search when configured | Future Teams / Foundry hosting |
 
 ### What gets provisioned (by the script)
 
 - Managed agent named `val-copilot` (configurable)
 - Model deployment referenced by `AZURE_OPENAI_DEPLOYMENT_NAME` or `AZURE_FOUNDRY_MODEL_DEPLOYMENT`
-- ToolSet containing: `get_expiring_contracts`, `get_vendor_spend_summary`, `search_cloud_blob_contracts`
-- Instructions = full `SYSTEM_PROMPT` from `copilot_agent/agent.py`
+- ToolSet containing the structured contract-intelligence MCP surface:
+  - `search_contracts`
+  - `get_contract_profile`
+  - `get_expiring_contracts`
+  - `get_vendor_spend_summary` (committed-value rollup — **not** invoice actuals)
+  - `find_overlaps`
+  - `explain_contract_risk`
+  - `search_cloud_blob_contracts`
+- Instructions = full `SYSTEM_PROMPT` from `copilot_agent/agent.py` (includes hard OOS message for invoice/spend-actuals questions)
 
 ### What you must prepare first (on Azure)
 
@@ -39,7 +60,7 @@ financial exposure projections, and renewal strategy sheets).
 - At least one **chat model deployment** in that project
 - Entra ID **RBAC** for the identity that runs the script
 - Project **endpoint** URL copied into root `.env`
-- (For tools at runtime) Fabric SQL + Azure AI Search reachable by the execution identity
+- (For live tool backends) Fabric SQL and/or Azure AI Search reachable by the execution identity — **not required** if tools run against offline fixtures
 
 ---
 
@@ -128,14 +149,16 @@ The deploy script uses **DefaultAzureCredential** (your user, service principal,
 4. Assign to the identity that will run `deploy_to_foundry.py` (your user UPN or the service principal).
 5. If teammates will use the agent, grant them the same (or Reader + run permissions per your org standard).
 
-Also plan data-plane access (needed when tools actually run):
+Also plan data-plane access (needed when tools actually run against live backends).
+For fixture-backed demos, set `USE_OFFLINE_MOCKS=true` on the tool-host process instead.
 
 | Data system | Typical need |
 | --- | --- |
-| Microsoft Fabric SQL | Identity can connect via `ActiveDirectoryDefault` to the Gold warehouse |
-| Azure AI Search | Search index reader (or API key in `.env` for key-based access) |
+| Synthetic fixtures (POC) | `USE_OFFLINE_MOCKS=true` + `mcp_server/test_fixtures.json` |
+| Microsoft Fabric SQL (optional) | Identity can connect via `ActiveDirectoryDefault` to the Gold warehouse |
+| Azure AI Search (optional) | Search index reader (or API key in `.env` for key-based access) |
 
-**Done when:** The deploying identity has Foundry project rights, and Fabric/Search access is planned.
+**Done when:** The deploying identity has Foundry project rights, and a tool data path (fixtures or Fabric/Search) is planned.
 
 ---
 
@@ -191,8 +214,8 @@ Do **not** run the Python deploy script until every box is checked:
 - [ ] Exact **deployment name** recorded (example: `gpt-4o`)
 - [ ] **Agents** blade opens successfully
 - [ ] Deploying identity has **Azure AI Developer** (or equivalent) on the project
-- [ ] Fabric SQL + Azure AI Search access planned for tool runtime
-- [ ] Networking allowlists completed (if required)
+- [ ] Tool data path planned (offline fixtures **or** Fabric SQL / Azure AI Search)
+- [ ] Networking allowlists completed (if required for live backends)
 
 ---
 
@@ -222,8 +245,9 @@ Map values collected in Part A:
 | `AZURE_FOUNDRY_CONNECTION_STRING` | Yes | Project endpoint from **A6** |
 | `AZURE_FOUNDRY_MODEL_DEPLOYMENT` or `AZURE_OPENAI_DEPLOYMENT_NAME` | Yes | Exact deployment name from **A3** |
 | `AZURE_FOUNDRY_AGENT_NAME` | No | Desired agent name (default `val-copilot`) |
-| `FABRIC_SQL_SERVER` / `FABRIC_SQL_DATABASE` | Runtime | Fabric warehouse |
-| `AZURE_SEARCH_ENDPOINT` / API key / index | Runtime | Azure AI Search |
+| `USE_OFFLINE_MOCKS` | POC demos | `true` to use `test_fixtures.json` instead of live Fabric |
+| `FABRIC_SQL_SERVER` / `FABRIC_SQL_DATABASE` | Live runtime | Fabric warehouse (optional) |
+| `AZURE_SEARCH_ENDPOINT` / API key / index | Live runtime | Azure AI Search (optional) |
 
 Example:
 
@@ -277,7 +301,9 @@ python deploy_to_foundry.py --dry-run -v
 Expected:
 
 - `status: dry_run`
-- tools: `get_expiring_contracts`, `get_vendor_spend_summary`, `search_cloud_blob_contracts`
+- tools include: `search_contracts`, `get_contract_profile`, `get_expiring_contracts`,
+  `get_vendor_spend_summary`, `find_overlaps`, `explain_contract_risk`,
+  `search_cloud_blob_contracts`
 - non-zero `instructions_chars`
 - endpoint parsed from `AZURE_FOUNDRY_CONNECTION_STRING`
 
@@ -312,19 +338,27 @@ Return to [ai.azure.com](https://ai.azure.com) → your project:
 1. Open **Build** → **Agents**.
 2. Confirm agent `val-copilot` (or your custom name) appears.
 3. Open the agent and check:
-   - **Instructions** contain Comparative Analysis + Contract Lifecycle Procedures
-   - **Tools** list the three function tools
+   - **Instructions** contain Comparative Analysis + Contract Lifecycle Procedures + invoice/spend OOS guardrail
+   - **Tools** list the seven function tools (search/profile/expiring/spend/overlaps/risk/blob)
    - **Model** matches the deployment from **A3**
-4. Use the **Agent playground** (if available) with:
-   - “Show expiring contracts”
-   - “Red-flag compliance audit for CON-0003”
-5. If tool calls fail in playground, verify Fabric/Search credentials and that the host executing function tools can reach those services.
+4. Use the **Agent playground** (if available) with demo prompts from `docs/demo_script.md`, for example:
+   - “Which contracts expire in 90 days?”
+   - “Any overlapping AlphaTech contracts?”
+   - “Show invoice totals for AlphaTech” → expect exact OOS message (no tool calls)
+5. If tool calls fail in playground, verify fixture/offline flags or Fabric/Search credentials and that the host executing function tools can reach those services.
 
 ---
 
 ## Runtime & architecture notes
 
-The Foundry-managed agent stores **instructions + tool definitions**. Function tool **implementations** are the Python MCP functions from this repo and run in the process that handles tool calls. Ensure that host can reach Fabric SQL (ODBC Driver 18 + ActiveDirectoryDefault) and Azure AI Search.
+The Foundry-managed agent stores **instructions + tool definitions**. Function tool
+**implementations** are the Python MCP functions from this repo and run in the
+process that handles tool calls.
+
+- **Preferred for this POC:** `USE_OFFLINE_MOCKS=true` against `mcp_server/test_fixtures.json`
+- **Optional live backends:** Fabric SQL (ODBC Driver 18 + ActiveDirectoryDefault) and Azure AI Search
+- **Hard OOS:** invoice/spend-actuals questions must return the exact POC OOS string and must not call spend tools as if they were invoice APIs
+- Architecture / process flow: `docs/VAL_CoPilot_Architecture_and_Process_Flow.pdf` (and `.pptx`)
 
 ### Cognitive procedures encoded in SYSTEM_PROMPT
 
@@ -333,6 +367,7 @@ The Foundry-managed agent stores **instructions + tool definitions**. Function t
 - Dynamic Counter-Clause Drafting → `## Dynamic Counter-Clause Drafting`
 - Financial Exposure Projections → `## Financial Exposure Projection`
 - Proactive Renewal Strategy Sheets → `## Proactive Renewal Strategy Sheet`
+- Invoice / spend-actuals → hard OOS (separate data-linkage POC)
 
 ---
 

@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
-Generate VAL CoPilot production architecture + process-flow PowerPoint.
-
-Excludes offline/mock testing paths (USE_OFFLINE_MOCKS, offline_router, fixtures).
+Generate VAL CoPilot architecture + process-flow PowerPoint for the
+Synthetic Contract Intelligence Tool-Layer POC.
 """
 
 from __future__ import annotations
@@ -11,16 +10,14 @@ from pathlib import Path
 
 from pptx import Presentation
 from pptx.dml.color import RGBColor
-from pptx.enum.shapes import MSO_CONNECTOR, MSO_SHAPE
-from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
-from pptx.oxml.ns import nsmap, qn
-from pptx.util import Emu, Inches, Pt
+from pptx.enum.shapes import MSO_SHAPE
+from pptx.enum.text import PP_ALIGN
+from pptx.util import Inches, Pt
 
 DOCS = Path(__file__).resolve().parent
 PPTX_PATH = DOCS / "VAL_CoPilot_Architecture_and_Process_Flow.pptx"
 ARTIFACT = Path("/opt/cursor/artifacts/VAL_CoPilot_Architecture_and_Process_Flow.pptx")
 
-# Widescreen 16:9
 SLIDE_W = Inches(13.333)
 SLIDE_H = Inches(7.5)
 
@@ -41,6 +38,8 @@ GREEN_LIGHT = RGBColor(0xD1, 0xFA, 0xE5)
 GOLD = RGBColor(0xB4, 0x53, 0x09)
 GOLD_LIGHT = RGBColor(0xFE, 0xF3, 0xC7)
 GRAY = RGBColor(0x94, 0xA3, 0xB8)
+RED = RGBColor(0xB9, 0x1C, 0x1C)
+RED_LIGHT = RGBColor(0xFE, 0xE2, 0xE2)
 
 
 def _set_run(run, text: str, size: int, bold: bool = False, color: RGBColor = SLATE) -> None:
@@ -58,30 +57,15 @@ def _fill_shape(shape, fill: RGBColor, line: RGBColor, line_pt: float = 1.25) ->
     shape.line.width = Pt(line_pt)
 
 
-def add_box(
-    slide,
-    left,
-    top,
-    width,
-    height,
-    fill: RGBColor,
-    line: RGBColor,
-    title: str,
-    subtitle: str = "",
-    title_size: int = 12,
-    sub_size: int = 10,
-    title_color: RGBColor | None = None,
-):
+def add_box(slide, left, top, width, height, fill, line, title, subtitle="", title_size=12, sub_size=10, title_color=None):
     shape = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, left, top, width, height)
     _fill_shape(shape, fill, line)
-    # Soft corners
     try:
         shape.adjustments[0] = 0.12
     except Exception:  # noqa: BLE001
         pass
     tf = shape.text_frame
     tf.word_wrap = True
-    tf.auto_size = None
     shape.text_frame.clear()
     p = tf.paragraphs[0]
     p.alignment = PP_ALIGN.CENTER
@@ -91,23 +75,7 @@ def add_box(
         p2 = tf.add_paragraph()
         p2.alignment = PP_ALIGN.CENTER
         run2 = p2.add_run()
-        _set_run(run2, subtitle, sub_size, bold=False, color=SLATE)
-    tf.paragraphs[0].space_before = Pt(2)
-    return shape
-
-
-def add_layer_band(slide, left, top, width, height, fill: RGBColor, line: RGBColor, label: str):
-    shape = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, left, top, width, height)
-    _fill_shape(shape, fill, line, 1.5)
-    try:
-        shape.adjustments[0] = 0.04
-    except Exception:  # noqa: BLE001
-        pass
-    # Label at top-left via separate text box for clarity
-    tb = slide.shapes.add_textbox(left + Inches(0.15), top + Inches(0.08), width - Inches(0.3), Inches(0.3))
-    p = tb.text_frame.paragraphs[0]
-    run = p.add_run()
-    _set_run(run, label, 13, bold=True, color=line)
+        _set_run(run2, subtitle, sub_size, color=SLATE)
     return shape
 
 
@@ -115,24 +83,16 @@ def add_title_bar(slide, text: str, subtitle: str = "") -> None:
     bar = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(0), Inches(0), SLIDE_W, Inches(0.85))
     _fill_shape(bar, NAVY, NAVY, 0)
     tb = slide.shapes.add_textbox(Inches(0.4), Inches(0.18), Inches(12.5), Inches(0.55))
-    p = tb.text_frame.paragraphs[0]
-    run = p.add_run()
-    _set_run(run, text, 22, bold=True, color=WHITE)
+    run = tb.text_frame.paragraphs[0].add_run()
+    _set_run(run, text, 20, bold=True, color=WHITE)
     if subtitle:
         sub = slide.shapes.add_textbox(Inches(0.4), Inches(0.9), Inches(12.5), Inches(0.35))
-        p2 = sub.text_frame.paragraphs[0]
-        run2 = p2.add_run()
-        _set_run(run2, subtitle, 12, bold=False, color=SLATE)
+        run2 = sub.text_frame.paragraphs[0].add_run()
+        _set_run(run2, subtitle, 12, color=SLATE)
 
 
-def add_arrow_right(slide, left, top, width=Inches(0.35), height=Inches(0.18), color: RGBColor = GRAY):
+def add_arrow_right(slide, left, top, width=Inches(0.3), height=Inches(0.18), color=GRAY):
     shape = slide.shapes.add_shape(MSO_SHAPE.RIGHT_ARROW, left, top, width, height)
-    _fill_shape(shape, color, color, 0)
-    return shape
-
-
-def add_arrow_down(slide, left, top, width=Inches(0.18), height=Inches(0.3), color: RGBColor = GRAY):
-    shape = slide.shapes.add_shape(MSO_SHAPE.DOWN_ARROW, left, top, width, height)
     _fill_shape(shape, color, color, 0)
     return shape
 
@@ -142,383 +102,240 @@ def add_footer(slide, page: str) -> None:
     p = tb.text_frame.paragraphs[0]
     p.alignment = PP_ALIGN.CENTER
     run = p.add_run()
-    _set_run(run, f"VAL CoPilot · Production architecture only (no mock/offline paths) · {page}", 9, color=GRAY)
+    _set_run(run, f"Synthetic Contract Intelligence Tool-Layer POC · {page}", 9, color=GRAY)
 
 
 def slide_cover(prs: Presentation) -> None:
-    slide = prs.slides.add_slide(prs.slide_layouts[6])  # blank
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
     bg = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 0, SLIDE_W, SLIDE_H)
     _fill_shape(bg, LIGHT, LIGHT, 0)
-    accent = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, Inches(2.2), SLIDE_W, Inches(2.6))
+    accent = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, Inches(2.0), SLIDE_W, Inches(2.8))
     _fill_shape(accent, NAVY, NAVY, 0)
-
-    title = slide.shapes.add_textbox(Inches(0.8), Inches(2.5), Inches(11.7), Inches(1.0))
+    title = slide.shapes.add_textbox(Inches(0.8), Inches(2.3), Inches(11.7), Inches(0.8))
     p = title.text_frame.paragraphs[0]
     p.alignment = PP_ALIGN.CENTER
-    run = p.add_run()
-    _set_run(run, "VAL CoPilot", 36, bold=True, color=WHITE)
-
-    sub = slide.shapes.add_textbox(Inches(0.8), Inches(3.4), Inches(11.7), Inches(0.8))
+    _set_run(p.add_run(), "VAL CoPilot", 34, bold=True, color=WHITE)
+    sub = slide.shapes.add_textbox(Inches(0.8), Inches(3.15), Inches(11.7), Inches(1.0))
     p2 = sub.text_frame.paragraphs[0]
     p2.alignment = PP_ALIGN.CENTER
-    run2 = p2.add_run()
-    _set_run(run2, "Architecture & Process Flow", 28, bold=True, color=TEAL_LIGHT)
-
-    note = slide.shapes.add_textbox(Inches(1.5), Inches(5.2), Inches(10.3), Inches(1.2))
-    for i, line in enumerate(
-        [
-            "Three-layer monorepo: Validation UI → Cognitive Routing → Data Retrieval MCP",
-            "Includes contract lifecycle procedures, compare framework, and Foundry deploy path",
-            "Excluded: USE_OFFLINE_MOCKS, offline cognitive router, test fixtures",
-        ]
-    ):
+    _set_run(p2.add_run(), "Synthetic Contract Intelligence\nTool-Layer POC — Architecture & Process Flow", 22, bold=True, color=TEAL_LIGHT)
+    note = slide.shapes.add_textbox(Inches(1.2), Inches(5.3), Inches(10.9), Inches(1.4))
+    for i, line in enumerate([
+        "Current: Streamlit → Flask /api/messages → LangChain or offline router → FastMCP tools → synthetic Gold data",
+        "Future: Streamlit/Teams → Azure AI Foundry Agent → same MCP/API tools → LinkSquares later",
+        "Not Azure AI Foundry-first today · Invoice/actual-spend systems are out of scope",
+    ]):
         para = note.text_frame.paragraphs[0] if i == 0 else note.text_frame.add_paragraph()
         para.alignment = PP_ALIGN.CENTER
-        run = para.add_run()
-        _set_run(run, line, 14, color=SLATE)
+        _set_run(para.add_run(), line, 13, color=SLATE)
+
+
+def slide_current_vs_future(prs: Presentation) -> None:
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    add_title_bar(slide, "1. Current vs Future Architecture", "Keep the tool layer stable; swap the cognitive host later")
+    add_box(
+        slide, Inches(0.4), Inches(1.4), Inches(6.1), Inches(5.2), TEAL_LIGHT, TEAL,
+        "CURRENT — Tool-Layer POC",
+        "Streamlit UI\n→ Flask POST /api/messages\n→ LangChain AgentExecutor\n   or offline cognitive router\n→ FastMCP tool server\n→ ContractRepository\n→ Synthetic Gold fixtures\n   (Fabric SQL / AI Search later)",
+        16, 13,
+    )
+    add_box(
+        slide, Inches(6.8), Inches(1.4), Inches(6.1), Inches(5.2), PURPLE_LIGHT, PURPLE,
+        "FUTURE — Foundry-hosted agent",
+        "Streamlit or Teams UI\n→ Azure AI Foundry Agent\n→ Same MCP / API tools\n→ ContractRepository\n→ Synthetic contract data now\n→ LinkSquares / CLM later\n→ Grounded answers",
+        16, 13,
+    )
+    add_footer(slide, "Slide 2")
 
 
 def slide_architecture(prs: Presentation) -> None:
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     add_title_bar(
         slide,
-        "1. Production System Architecture",
-        "Streamlit → Flask / LangChain / Azure OpenAI → MCP tools → Fabric SQL + Azure AI Search (+ PGVector)",
+        "2. Tool-Layer System Architecture",
+        "Three layers + replaceable ContractRepository + invoice OOS guardrail",
     )
-
-    # Layer 1
-    add_layer_band(slide, Inches(0.35), Inches(1.35), Inches(12.6), Inches(1.35), BLUE_LIGHT, BLUE, "Layer 1 — Validation UI (test_ui)")
-    add_box(slide, Inches(0.7), Inches(1.8), Inches(3.6), Inches(0.7), WHITE, BLUE, "Streamlit test_ui", "Bot Framework activity builder")
-    add_box(slide, Inches(4.7), Inches(1.8), Inches(3.6), Inches(0.7), WHITE, BLUE, "User Prompt", "Markdown reply rendering")
-    add_box(slide, Inches(8.7), Inches(1.8), Inches(3.6), Inches(0.7), WHITE, BLUE, "HTTP Client", "COPILOT_MESSAGES_URL → :3978")
-    add_arrow_right(slide, Inches(4.35), Inches(2.05), color=BLUE)
-    add_arrow_right(slide, Inches(8.35), Inches(2.05), color=BLUE)
-
-    # Layer 2
-    add_layer_band(slide, Inches(0.35), Inches(2.9), Inches(12.6), Inches(2.15), TEAL_LIGHT, TEAL, "Layer 2 — Cognitive Routing (copilot_agent)")
-    add_box(slide, Inches(0.7), Inches(3.4), Inches(2.8), Inches(0.85), WHITE, TEAL, "Flask /api/messages", "app.py")
-    add_box(slide, Inches(3.9), Inches(3.4), Inches(3.0), Inches(0.85), WHITE, TEAL, "LangChain AgentExecutor", "OpenAI tools agent + SYSTEM_PROMPT")
-    add_box(slide, Inches(7.3), Inches(3.4), Inches(2.6), Inches(0.85), ORANGE_LIGHT, ORANGE, "Azure OpenAI", "AzureChatOpenAI")
-    add_box(slide, Inches(10.2), Inches(3.4), Inches(2.4), Inches(0.85), PURPLE_LIGHT, PURPLE, "Cognitive Procedures", "Compare · Audit · Exposure…")
-    add_arrow_right(slide, Inches(3.55), Inches(3.7), color=TEAL)
-    add_arrow_right(slide, Inches(6.95), Inches(3.7), color=ORANGE)
-    add_box(slide, Inches(0.7), Inches(4.45), Inches(5.5), Inches(0.45), WHITE, TEAL, "DualMCPBridge (mcp_clients.py) — stdio MCP to fabric_data + pgvector", title_size=11)
-    add_arrow_down(slide, Inches(6.3), Inches(4.95), color=GREEN)
-
-    # Layer 3
-    add_layer_band(slide, Inches(0.35), Inches(5.25), Inches(12.6), Inches(1.65), GREEN_LIGHT, GREEN, "Layer 3 — Data Retrieval (mcp_server FastMCP)")
-    tools = [
-        ("get_expiring_contracts", 0.55),
-        ("get_vendor_spend_summary", 3.0),
-        ("compare_contracts", 5.45),
-        ("check_missing_fields", 7.9),
-        ("search_cloud_blob", 10.35),
-    ]
-    for name, x in tools:
-        add_box(slide, Inches(x), Inches(5.7), Inches(2.25), Inches(0.5), WHITE, GREEN, name, title_size=10)
-
-    add_box(slide, Inches(0.7), Inches(6.35), Inches(3.7), Inches(0.4), GOLD_LIGHT, GOLD, "Microsoft Fabric SQL (Gold)", title_size=11, title_color=GOLD)
-    add_box(slide, Inches(4.7), Inches(6.35), Inches(3.7), Inches(0.4), BLUE_LIGHT, BLUE, "Azure AI Search (semantic hybrid)", title_size=11, title_color=BLUE)
-    add_box(slide, Inches(8.7), Inches(6.35), Inches(3.7), Inches(0.4), PURPLE_LIGHT, PURPLE, "Postgres / PGVector memory", title_size=11, title_color=PURPLE)
-    add_footer(slide, "Slide 2")
+    add_box(slide, Inches(0.35), Inches(1.25), Inches(12.6), Inches(1.15), BLUE_LIGHT, BLUE,
+            "Layer 1 — Validation UI (test_ui)", "Streamlit Bot Framework harness → COPILOT_MESSAGES_URL", 14, 12)
+    add_box(slide, Inches(0.35), Inches(2.55), Inches(12.6), Inches(1.7), TEAL_LIGHT, TEAL,
+            "Layer 2 — Cognitive Routing (copilot_agent)",
+            "Flask /api/messages · LangChain AzureChatOpenAI / offline_router · SYSTEM_PROMPT · invoice OOS hard-match before tools",
+            14, 12)
+    add_box(slide, Inches(0.35), Inches(4.4), Inches(12.6), Inches(2.3), GREEN_LIGHT, GREEN,
+            "Layer 3 — Data Retrieval (mcp_server)",
+            "ContractRepository → FabricContractRepository (synthetic Gold today)\n"
+            "Tools: search_contracts · get_contract_profile · find_overlaps · explain_contract_risk · "
+            "compare_contracts · check_missing_contract_fields · get_expiring_contracts · get_vendor_spend_summary · search_cloud_blob_contracts",
+            14, 11)
+    add_footer(slide, "Slide 3")
 
 
 def slide_request_flow(prs: Presentation) -> None:
     slide = prs.slides.add_slide(prs.slide_layouts[6])
-    add_title_bar(
-        slide,
-        "2. End-to-End Request Process Flow",
-        "Production control loop — UI ingress → tool execution → Markdown synthesis",
-    )
-
-    steps_top = [
-        ("1. User asks\nin Streamlit", BLUE_LIGHT, BLUE, 0.5),
-        ("2. POST\n/api/messages", TEAL_LIGHT, TEAL, 3.5),
-        ("3. Azure OpenAI\nplans tool calls", ORANGE_LIGHT, ORANGE, 6.5),
-        ("4. MCP tools\nexecute", GREEN_LIGHT, GREEN, 9.5),
+    add_title_bar(slide, "3. End-to-End Request Process Flow", "Deterministic offline path used for demo reliability")
+    steps = [
+        ("1. User prompt", "Streamlit chat", BLUE_LIGHT, BLUE, 0.35),
+        ("2. Invoice OOS?", "Hard refuse if invoice/AP", RED_LIGHT, RED, 2.9),
+        ("3. Route intent", "offline_router / LLM tools", TEAL_LIGHT, TEAL, 5.45),
+        ("4. MCP tools", "ContractRepository", GREEN_LIGHT, GREEN, 8.0),
+        ("5. Markdown reply", "Grounded sections", ORANGE_LIGHT, ORANGE, 10.55),
     ]
-    for title, fill, line, x in steps_top:
-        add_box(slide, Inches(x), Inches(1.6), Inches(2.6), Inches(1.1), fill, line, title.replace("\n", " "), title_size=14)
-    for x in (3.15, 6.15, 9.15):
-        add_arrow_right(slide, Inches(x), Inches(2.0), Inches(0.3), Inches(0.22), GRAY)
+    for title, sub, fill, line, x in steps:
+        add_box(slide, Inches(x), Inches(1.7), Inches(2.35), Inches(1.4), fill, line, title, sub, 13, 11)
+    for x in (2.55, 5.1, 7.65, 10.2):
+        add_arrow_right(slide, Inches(x), Inches(2.3), color=GRAY)
 
-    add_arrow_down(slide, Inches(10.6), Inches(2.8), Inches(0.22), Inches(0.45), GRAY)
-
-    steps_bot = [
-        ("8. UI renders answer", BLUE_LIGHT, BLUE, 0.5),
-        ("7. Flask reply activity", TEAL_LIGHT, TEAL, 3.5),
-        ("6. LLM synthesizes Markdown", ORANGE_LIGHT, ORANGE, 6.5),
-        ("5. Evidence returned", GREEN_LIGHT, GREEN, 9.5),
-    ]
-    for title, fill, line, x in steps_bot:
-        add_box(slide, Inches(x), Inches(3.4), Inches(2.6), Inches(1.1), fill, line, title, title_size=14)
-    # Bottom row flows right-to-left (5 → 6 → 7 → 8)
-    for x in (3.15, 6.15, 9.15):
-        arr = slide.shapes.add_shape(
-            MSO_SHAPE.LEFT_ARROW, Inches(x), Inches(3.8), Inches(0.3), Inches(0.22)
-        )
-        _fill_shape(arr, GRAY, GRAY, 0)
-
-    # Routing strip
-    add_layer_band(
-        slide,
-        Inches(0.4),
-        Inches(4.9),
-        Inches(12.5),
-        Inches(1.7),
-        LIGHT,
-        GRAY,
-        "Intent → Tool Domain Routing (SYSTEM_PROMPT)",
-    )
-    domains = [
-        ("Financial / dates", "Fabric SQL tools", GOLD_LIGHT, GOLD, 0.7),
-        ("Compare / completeness", "Analytics tools", TEAL_LIGHT, TEAL, 3.8),
-        ("Legal clauses / PDFs", "Azure AI Search", BLUE_LIGHT, BLUE, 6.9),
-        ("Session memory", "PGVector MCP", PURPLE_LIGHT, PURPLE, 10.0),
-    ]
-    for title, sub, fill, line, x in domains:
-        add_box(slide, Inches(x), Inches(5.5), Inches(2.8), Inches(0.85), fill, line, title, sub, 12, 11)
-
-    add_footer(slide, "Slide 3")
-
-
-def slide_lifecycle(prs: Presentation) -> None:
-    slide = prs.slides.add_slide(prs.slide_layouts[6])
-    add_title_bar(
-        slide,
-        "3. Contract Lifecycle Cognitive Procedures",
-        "Analysis enforced in orchestrator SYSTEM_PROMPT — not in MCP tool bodies",
-    )
-
-    headers = [("User Intent", 0.4), ("Tools Invoked", 4.5), ("Required Markdown Output", 8.6)]
-    for text, x in headers:
-        tb = slide.shapes.add_textbox(Inches(x), Inches(1.2), Inches(3.8), Inches(0.35))
-        run = tb.text_frame.paragraphs[0].add_run()
-        _set_run(run, text, 14, bold=True, color=NAVY)
-
-    rows = [
-        (
-            "Single-agreement audit / red flag",
-            "check_missing_contract_fields + search_cloud_blob_contracts",
-            "## Red-Flag Compliance Audit",
-            ORANGE,
-            ORANGE_LIGHT,
-        ),
-        (
-            "High-risk clause found",
-            "search_cloud_blob_contracts (clause evidence)",
-            "## Dynamic Counter-Clause Drafting",
-            ORANGE,
-            ORANGE_LIGHT,
-        ),
-        (
-            "Penalty / breach exposure",
-            "get_vendor_spend_summary + expiring/compare + search",
-            "## Financial Exposure Projection",
-            GOLD,
-            GOLD_LIGHT,
-        ),
-        (
-            "Expiring / renew / terminate",
-            "get_expiring_contracts + get_vendor_spend_summary",
-            "## Proactive Renewal Strategy Sheet",
-            TEAL,
-            TEAL_LIGHT,
-        ),
-        (
-            "Compare 2+N contracts",
-            "compare_contracts + spend + search",
-            "## Recommendation",
-            BLUE,
-            BLUE_LIGHT,
-        ),
-    ]
-    for i, (intent, tools, output, color, light) in enumerate(rows):
-        y = 1.6 + i * 0.9
-        add_box(slide, Inches(0.4), Inches(y), Inches(3.7), Inches(0.75), WHITE, color, intent, title_size=12)
-        add_arrow_right(slide, Inches(4.2), Inches(y + 0.28), Inches(0.25), Inches(0.18), GRAY)
-        add_box(slide, Inches(4.5), Inches(y), Inches(3.8), Inches(0.75), GREEN_LIGHT, GREEN, tools, title_size=11)
-        add_arrow_right(slide, Inches(8.4), Inches(y + 0.28), Inches(0.25), Inches(0.18), GRAY)
-        add_box(slide, Inches(8.7), Inches(y), Inches(4.1), Inches(0.75), light, color, output, title_size=12, title_color=color)
-
-    note = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(0.4), Inches(6.3), Inches(12.5), Inches(0.5))
-    _fill_shape(note, PURPLE_LIGHT, PURPLE)
-    p = note.text_frame.paragraphs[0]
-    p.alignment = PP_ALIGN.CENTER
-    run = p.add_run()
-    _set_run(
-        run,
-        "When multiple procedures apply: Audit → Counter-Clause → Exposure → Renewal → Recommendation",
-        13,
-        bold=True,
-        color=PURPLE,
+    add_box(
+        slide, Inches(0.4), Inches(3.5), Inches(12.5), Inches(3.1), LIGHT, GRAY,
+        "Intent → primary tool",
+        "Show contracts for vendor → search_contracts\n"
+        "Details for C-1001 → get_contract_profile\n"
+        "Overlapping contracts → find_overlaps\n"
+        "Unusual payment / high rates → explain_contract_risk\n"
+        "Compare C-1001 vs C-1002 → compare_contracts\n"
+        "Need action next 90 days → get_expiring_contracts\n"
+        "Missing renewal info → check_missing_contract_fields\n"
+        "Invoice spend also? → exact OOS refusal (no tools)",
+        14, 12,
     )
     add_footer(slide, "Slide 4")
 
 
-def slide_compare(prs: Presentation) -> None:
+def slide_repository(prs: Presentation) -> None:
     slide = prs.slides.add_slide(prs.slide_layouts[6])
-    add_title_bar(
-        slide,
-        "4. Comparative Analysis Decision Framework",
-        "N-way compare supported via comma-separated contract_refs / supplier_names / …",
-    )
-
-    stages = [
-        ("1. Quantitative Comparison", "ACV, tenure, auto-renew,\nhistorical vendor spend", GOLD_LIGHT, GOLD, 0.8),
-        ("2. Risk & Liability Assessment", "Liability caps, indemnity,\nSLA, termination / exit", ORANGE_LIGHT, ORANGE, 5.0),
-        ("3. Explicit Suggestion", "## Recommendation\nwinner + ranked runners-up", BLUE_LIGHT, BLUE, 9.2),
-    ]
-    for title, sub, fill, line, x in stages:
-        add_box(slide, Inches(x), Inches(2.4), Inches(3.3), Inches(2.0), fill, line, title, sub.replace("\n", " · "), 16, 12)
-    add_arrow_right(slide, Inches(4.25), Inches(3.3), Inches(0.55), Inches(0.28), GRAY)
-    add_arrow_right(slide, Inches(8.45), Inches(3.3), Inches(0.55), Inches(0.28), GRAY)
-
-    add_box(
-        slide,
-        Inches(0.8),
-        Inches(5.0),
-        Inches(11.7),
-        Inches(1.2),
-        LIGHT,
-        TEAL,
-        "Do not merely juxtapose excerpts — decide which option is structurally superior / lower risk",
-        "Tools: compare_contracts · get_vendor_spend_summary · get_expiring_contracts · search_cloud_blob_contracts",
-        14,
-        12,
-    )
+    add_title_bar(slide, "4. ContractRepository Abstraction", "Data source is replaceable without changing tool contracts")
+    add_box(slide, Inches(0.5), Inches(1.4), Inches(4.0), Inches(5.2), TEAL_LIGHT, TEAL,
+            "ContractRepository",
+            "list_all()\nget_by_id(contract_id)\nsearch(filters)\nget_by_vendor(vendor)",
+            16, 14)
+    add_arrow_right(slide, Inches(4.7), Inches(3.7), Inches(0.5), Inches(0.28), GRAY)
+    add_box(slide, Inches(5.4), Inches(1.4), Inches(3.6), Inches(2.3), GREEN_LIGHT, GREEN,
+            "Today", "FabricContractRepository\n→ Gold_Vendor_Contracts\n→ offline fixtures", 15, 13)
+    add_box(slide, Inches(5.4), Inches(4.0), Inches(3.6), Inches(2.6), PURPLE_LIGHT, PURPLE,
+            "Later", "LinkSquares / CLM adapter\nsame tool signatures\nsame snake_case projections", 15, 13)
+    add_box(slide, Inches(9.3), Inches(1.4), Inches(3.5), Inches(5.2), GOLD_LIGHT, GOLD,
+            "Consumers", "search_contracts\nget_contract_profile\nfind_overlaps\nexplain_contract_risk\ncompare / missing / expiring", 15, 12)
     add_footer(slide, "Slide 5")
 
 
-def slide_foundry(prs: Presentation) -> None:
+def slide_new_tools(prs: Presentation) -> None:
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    add_title_bar(slide, "5. Structured Intelligence Tools (P0/P1)", "Grounded metadata tools — not document search")
+    tools = [
+        ("search_contracts", "Vendor/BU/status/type filters\nStable snake_case catalog rows", GREEN_LIGHT, GREEN, 0.4, 1.3),
+        ("get_contract_profile", "One contract_id profile\n+ missing_fields", TEAL_LIGHT, TEAL, 4.6, 1.3),
+        ("find_overlaps", "Same-vendor date overlaps\ncontract_a/b + window + why", ORANGE_LIGHT, ORANGE, 8.8, 1.3),
+        ("explain_contract_risk", "known_facts vs computed_risks\nmissing_data + review action", PURPLE_LIGHT, PURPLE, 0.4, 4.0),
+        ("Invoice OOS guardrail", "Exact refusal before tools\nNever treat ACV as invoices", RED_LIGHT, RED, 4.6, 4.0),
+        ("Demo fixtures", "AlphaTech C-1001 / C-1002 / C-1003\nDeliberate overlaps & Net 90", GOLD_LIGHT, GOLD, 8.8, 4.0),
+    ]
+    for title, sub, fill, line, x, y in tools:
+        add_box(slide, Inches(x), Inches(y), Inches(3.9), Inches(2.3), fill, line, title, sub, 14, 12)
+    add_footer(slide, "Slide 6")
+
+
+def slide_risk_flow(prs: Presentation) -> None:
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    add_title_bar(slide, "6. Overlap & Risk Explanation Process Flow", "Separate facts from computed risks — no invented findings")
+    add_box(slide, Inches(0.4), Inches(1.4), Inches(4.0), Inches(5.2), ORANGE_LIGHT, ORANGE,
+            "find_overlaps",
+            "1. Load contracts via repository\n2. Group by vendor\n3. Intersect effective→expiration\n4. Emit overlap_start/end\n5. why_flagged + source\n\nDemo: C-1001 ∩ C-1002",
+            15, 12)
+    add_box(slide, Inches(4.7), Inches(1.4), Inches(4.0), Inches(5.2), PURPLE_LIGHT, PURPLE,
+            "explain_contract_risk",
+            "Flags only if data supports:\n• missing renewal\n• missing rate card\n• expiring soon\n• Net 90+ terms\n• high ACV outlier\n• high supplier risk\n• overlapping contract",
+            15, 12)
+    add_box(slide, Inches(9.0), Inches(1.4), Inches(3.9), Inches(5.2), TEAL_LIGHT, TEAL,
+            "Response sections",
+            "known_facts\ncomputed_risks\nmissing_data\nrecommended_review_action\nsource\n\nNever invent unsupported risks",
+            15, 12)
+    add_footer(slide, "Slide 7")
+
+
+def slide_tool_inventory(prs: Presentation) -> None:
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    add_title_bar(slide, "7. Full MCP Tool Inventory", "fabric_data FastMCP server")
+    left = [
+        "search_contracts",
+        "get_contract_profile",
+        "find_overlaps",
+        "explain_contract_risk",
+        "compare_contracts",
+    ]
+    right = [
+        "check_missing_contract_fields",
+        "get_expiring_contracts",
+        "get_vendor_spend_summary (ACV rollup only)",
+        "search_cloud_blob_contracts (docs)",
+        "fabric_health_check",
+    ]
+    add_box(slide, Inches(0.5), Inches(1.4), Inches(6.0), Inches(4.8), GREEN_LIGHT, GREEN,
+            "Structured / analytics", "\n".join(left), 15, 13)
+    add_box(slide, Inches(6.9), Inches(1.4), Inches(5.9), Inches(4.8), BLUE_LIGHT, BLUE,
+            "Commercial / docs / health", "\n".join(right), 15, 13)
+    add_footer(slide, "Slide 8")
+
+
+def slide_foundry_future(prs: Presentation) -> None:
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     add_title_bar(
         slide,
-        "5. Azure AI Foundry Provisioning Path",
-        "copilot_agent/deploy_to_foundry.py — DefaultAzureCredential + FunctionTool / ToolSet",
+        "8. Optional Future — Azure AI Foundry Deploy",
+        "deploy_to_foundry.py is optional; current POC does not require Foundry",
     )
-
     steps = [
         ("Root .env", "AZURE_FOUNDRY_\nCONNECTION_STRING", TEAL_LIGHT, TEAL, 0.4),
-        ("DefaultAzure\nCredential", "Entra ID auth", ORANGE_LIGHT, ORANGE, 3.0),
-        ("Import MCP\ntools", "3 Fabric/Search\ncallables", GREEN_LIGHT, GREEN, 5.6),
-        ("FunctionTool\n+ ToolSet", "azure-ai-agents", BLUE_LIGHT, BLUE, 8.2),
-        ("create_agent", "SYSTEM_PROMPT\ninstructions", PURPLE_LIGHT, PURPLE, 10.8),
+        ("Entra auth", "DefaultAzureCredential", ORANGE_LIGHT, ORANGE, 3.0),
+        ("Wrap tools", "FunctionTool ToolSet\n(7 MCP tools)", GREEN_LIGHT, GREEN, 5.6),
+        ("create_agent", "SYSTEM_PROMPT\n+ OOS guardrail", BLUE_LIGHT, BLUE, 8.2),
+        ("Future host", "Teams / Foundry UI\nsame tool contracts", PURPLE_LIGHT, PURPLE, 10.8),
     ]
     for title, sub, fill, line, x in steps:
-        add_box(
-            slide,
-            Inches(x),
-            Inches(2.2),
-            Inches(2.3),
-            Inches(2.0),
-            fill,
-            line,
-            title.replace("\n", " "),
-            sub.replace("\n", " "),
-            14,
-            11,
-        )
+        add_box(slide, Inches(x), Inches(2.0), Inches(2.3), Inches(2.2), fill, line, title, sub.replace("\n", " "), 13, 11)
     for x in (2.75, 5.35, 7.95, 10.55):
-        add_arrow_right(slide, Inches(x), Inches(3.1), Inches(0.22), Inches(0.2), GRAY)
-
+        add_arrow_right(slide, Inches(x), Inches(3.0), Inches(0.22), Inches(0.2), GRAY)
     add_box(
-        slide,
-        Inches(0.5),
-        Inches(4.7),
-        Inches(12.3),
-        Inches(0.7),
-        GREEN_LIGHT,
-        GREEN,
-        "Foundry ToolSet: get_expiring_contracts · get_vendor_spend_summary · search_cloud_blob_contracts",
-        title_size=13,
+        slide, Inches(0.5), Inches(4.6), Inches(12.3), Inches(1.8), LIGHT, GRAY,
+        "Deploy script ToolSet (aligned with POC structured surface)",
+        "search_contracts · get_contract_profile · get_expiring_contracts · get_vendor_spend_summary · "
+        "find_overlaps · explain_contract_risk · search_cloud_blob_contracts\n"
+        "Current demos still use Flask + FastMCP locally; Foundry is optional hosting for the same tools.",
+        14, 12,
     )
-    add_box(
-        slide,
-        Inches(0.5),
-        Inches(5.6),
-        Inches(12.3),
-        Inches(0.7),
-        LIGHT,
-        SLATE,
-        "Full local MCP also exposes: compare_contracts · check_missing_contract_fields · fabric_health_check",
-        title_size=13,
-    )
-    add_footer(slide, "Slide 6")
+    add_footer(slide, "Slide 9")
 
 
 def slide_summary(prs: Presentation) -> None:
     slide = prs.slides.add_slide(prs.slide_layouts[6])
-    add_title_bar(
-        slide,
-        "6. Component & Change Summary",
-        "Production capabilities delivered (mock/offline staging excluded)",
-    )
-
+    add_title_bar(slide, "9. Demo-Ready Slice Summary", "Reliable · safe · synthetic")
     items = [
-        (
-            "Data Retrieval MCP",
-            "Fabric Gold tools for expiring contracts, vendor spend, N-way compare, missing-field completeness; "
-            "Azure AI Search hybrid semantic search; shared lookup dimensions.",
-            GREEN,
-            GREEN_LIGHT,
-        ),
-        (
-            "Cognitive Routing",
-            "LangChain OpenAI-tools agent with strict domain routing; Comparative Analysis framework; "
-            "four lifecycle procedures with mandatory Markdown sections.",
-            TEAL,
-            TEAL_LIGHT,
-        ),
-        (
-            "Validation UI",
-            "Streamlit emulator posting Bot Framework activities to POST /api/messages and rendering Markdown replies.",
-            BLUE,
-            BLUE_LIGHT,
-        ),
-        (
-            "Foundry Deploy",
-            "DefaultAzureCredential + ToolSet/FunctionTool provisioning via AZURE_FOUNDRY_CONNECTION_STRING.",
-            PURPLE,
-            PURPLE_LIGHT,
-        ),
-        (
-            "Config Boundary",
-            "Single root .env; MCP remains free of orchestration / LLM logic.",
-            GOLD,
-            GOLD_LIGHT,
-        ),
+        ("Safe", "Invoice/AP/JDE/NetSuite asks → exact OOS refusal; ACV never labeled as invoices", RED, RED_LIGHT),
+        ("Structured tools", "search / profile / overlaps / risk via ContractRepository", GREEN, GREEN_LIGHT),
+        ("Deterministic demo", "AlphaTech C-1001..C-1003 + docs/demo_script.md", TEAL, TEAL_LIGHT),
+        ("Replaceable data", "ContractRepository ready for LinkSquares later", PURPLE, PURPLE_LIGHT),
+        ("Foundry optional", "Current runtime is Flask+LangChain/offline router, not Foundry-first", GOLD, GOLD_LIGHT),
     ]
     for i, (title, body, color, light) in enumerate(items):
-        y = 1.25 + i * 0.95
-        add_box(slide, Inches(0.5), Inches(y), Inches(2.8), Inches(0.8), light, color, title, title_size=13, title_color=color)
-        body_box = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(3.5), Inches(y), Inches(9.3), Inches(0.8))
-        _fill_shape(body_box, WHITE, color)
-        try:
-            body_box.adjustments[0] = 0.08
-        except Exception:  # noqa: BLE001
-            pass
-        p = body_box.text_frame.paragraphs[0]
-        run = p.add_run()
-        _set_run(run, body, 12, color=SLATE)
-        body_box.text_frame.word_wrap = True
-
-    add_footer(slide, "Slide 7")
+        y = 1.25 + i * 1.05
+        add_box(slide, Inches(0.5), Inches(y), Inches(2.6), Inches(0.85), light, color, title, title_size=14, title_color=color)
+        add_box(slide, Inches(3.3), Inches(y), Inches(9.5), Inches(0.85), WHITE, color, body, title_size=13)
+    add_footer(slide, "Slide 10")
 
 
 def build_pptx(path: Path) -> None:
     prs = Presentation()
     prs.slide_width = SLIDE_W
     prs.slide_height = SLIDE_H
-
     slide_cover(prs)
+    slide_current_vs_future(prs)
     slide_architecture(prs)
     slide_request_flow(prs)
-    slide_lifecycle(prs)
-    slide_compare(prs)
-    slide_foundry(prs)
+    slide_repository(prs)
+    slide_new_tools(prs)
+    slide_risk_flow(prs)
+    slide_tool_inventory(prs)
+    slide_foundry_future(prs)
     slide_summary(prs)
-
     path.parent.mkdir(parents=True, exist_ok=True)
     prs.save(str(path))
 

@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """
-Provision VAL CoPilot into Azure AI Foundry as a managed Agents service agent.
+Optional Azure AI Foundry provisioning for VAL CoPilot.
 
-Loads root `.env` configuration, authenticates with DefaultAzureCredential,
-wraps Fabric / Azure AI Search MCP tool implementations in a Foundry ToolSet
-(FunctionTool), and creates the managed agent using the existing multi-agent
-SYSTEM_PROMPT (compliance audits, red-flagging, exposure projections, renewals).
+Current POC runtime does NOT require Foundry. The primary validated path is:
+  Streamlit Validation UI → Flask cognitive router → FastMCP tools → synthetic Gold.
 
-Required environment (root `.env`):
+This script is the optional future host path: it loads root `.env`, authenticates
+with DefaultAzureCredential, wraps MCP tool implementations in a Foundry ToolSet
+(FunctionTool), and creates a managed agent using SYSTEM_PROMPT (lifecycle
+procedures + invoice/spend OOS guardrail).
+
+Required environment (root `.env`) — only when using this optional path:
   AZURE_FOUNDRY_CONNECTION_STRING
     Either a project endpoint URL, or a semicolon-delimited connection string
     containing an `endpoint=` (and optional subscriptionId / resourceGroupName /
@@ -63,19 +66,31 @@ def _ensure_mcp_on_path() -> None:
 
 
 def load_fabric_tools() -> dict[str, Callable[..., Any]]:
-    """Import the production MCP tool callables from mcp_server/server.py."""
+    """Import MCP tool callables from mcp_server/server.py for the Foundry ToolSet.
+
+    Includes the structured contract-intelligence surface used by the tool-layer
+    POC (search/profile/renewals/spend rollup/overlaps/risk) plus blob search.
+    """
     _ensure_mcp_on_path()
     # Import after path mutation so local modules (azure_search, contract_analytics)
     # resolve the same way the FastMCP process does.
     from server import (  # type: ignore[import-not-found]
+        explain_contract_risk,
+        find_overlaps,
+        get_contract_profile,
         get_expiring_contracts,
         get_vendor_spend_summary,
         search_cloud_blob_contracts,
+        search_contracts,
     )
 
     tools = {
+        "search_contracts": search_contracts,
+        "get_contract_profile": get_contract_profile,
         "get_expiring_contracts": get_expiring_contracts,
         "get_vendor_spend_summary": get_vendor_spend_summary,
+        "find_overlaps": find_overlaps,
+        "explain_contract_risk": explain_contract_risk,
         "search_cloud_blob_contracts": search_cloud_blob_contracts,
     }
     for name, fn in tools.items():

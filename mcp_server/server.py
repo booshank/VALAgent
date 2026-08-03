@@ -131,6 +131,8 @@ from contract_analytics import (  # noqa: E402
     compare_contract_rows,
     compare_many_contract_rows,
     filter_contracts,
+    normalize_contract_profile,
+    normalize_contract_search_row,
     resolve_contract,
 )
 from fabric_sql import execute_query  # noqa: E402
@@ -162,6 +164,8 @@ def _load_vendor_contracts(max_rows: int = 500) -> list[dict[str, Any]]:
             ContractVersion,
             SupplierRiskRating,
             NoticePeriodDays,
+            PaymentTermsDays,
+            RateCardOnFile,
             ContractURL
         FROM Gold_Vendor_Contracts
     """
@@ -665,6 +669,109 @@ def search_cloud_blob_contracts(
     result["count"] = len(docs)
     result["criteria"] = criteria
     return json.dumps(result, default=str)
+
+
+@mcp.tool()
+def search_contracts(
+    vendor: str | None = None,
+    business_unit: str | None = None,
+    status: str | None = None,
+    contract_type: str | None = None,
+    max_rows: int = 50,
+) -> str:
+    """
+    Structured search over contract metadata (Gold contracts), not document search.
+
+    Filters optional vendor/business unit/status/type and returns a stable
+    snake_case field set for demo-ready contract lists.
+
+    Args:
+        vendor: Optional supplier / vendor name filter.
+        business_unit: Optional business unit filter.
+        status: Optional contract status filter (e.g. Active).
+        contract_type: Optional contract type filter.
+        max_rows: Maximum rows to return (default 50).
+
+    Returns:
+        JSON string with criteria, row_count, and normalized contract rows.
+    """
+    rows = _load_vendor_contracts(max_rows=500)
+    criteria = build_criteria(supplier_name=vendor, contract_type=contract_type)
+    filtered = filter_contracts(rows, criteria)
+    if business_unit and str(business_unit).strip():
+        needle = str(business_unit).strip().lower()
+        filtered = [
+            row
+            for row in filtered
+            if needle in str(row.get("BusinessUnit") or "").lower()
+        ]
+    if status and str(status).strip():
+        needle = str(status).strip().lower()
+        filtered = [
+            row
+            for row in filtered
+            if needle in str(row.get("ContractStatus") or "").lower()
+        ]
+    projected = [normalize_contract_search_row(row) for row in filtered[: max(1, int(max_rows))]]
+    return json.dumps(
+        {
+            "tool": "search_contracts",
+            "criteria": {
+                "vendor": vendor,
+                "business_unit": business_unit,
+                "status": status,
+                "contract_type": contract_type,
+            },
+            "row_count": len(projected),
+            "rows": projected,
+            "source": "synthetic_gold_contracts",
+        },
+        default=str,
+    )
+
+
+@mcp.tool()
+def get_contract_profile(contract_id: str) -> str:
+    """
+    Return a full normalized profile for one contract by ContractID.
+
+    Args:
+        contract_id: Contract identifier (e.g. C-1001 or CON-0001).
+
+    Returns:
+        JSON string with one normalized profile including missing_fields.
+    """
+    if not contract_id or not str(contract_id).strip():
+        return json.dumps(
+            {"error": "contract_id is required", "tool": "get_contract_profile"},
+            default=str,
+        )
+    rows = _load_vendor_contracts(max_rows=500)
+    resolved = resolve_contract(
+        rows, build_criteria(contract_ref=str(contract_id).strip())
+    )
+    contract = resolved.get("contract")
+    if contract is None:
+        return json.dumps(
+            {
+                "error": "Contract not found",
+                "tool": "get_contract_profile",
+                "contract_id": contract_id,
+                "match_count": resolved.get("match_count", 0),
+                "candidates": resolved.get("candidates", []),
+            },
+            default=str,
+        )
+    profile = normalize_contract_profile(contract)
+    return json.dumps(
+        {
+            "tool": "get_contract_profile",
+            "contract_id": profile.get("contract_id"),
+            "profile": profile,
+            "source": "synthetic_gold_contracts",
+        },
+        default=str,
+    )
 
 
 @mcp.tool()

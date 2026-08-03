@@ -82,12 +82,22 @@ assert all(
 health = json.loads(server.fabric_health_check())
 assert health["status"] == "ok", health
 
+structured = json.loads(server.search_contracts(vendor="AlphaTech Services", max_rows=50))
+assert structured["row_count"] >= 3, structured
+assert any(r.get("contract_id") == "C-1001" for r in structured["rows"])
+
+profile = json.loads(server.get_contract_profile("C-1001"))
+assert profile.get("profile", {}).get("contract_id") == "C-1001", profile
+assert "missing_fields" in profile.get("profile", {})
+
 print("offline interceptor OK")
 print(f"  expiring_rows={expiring['row_count']}")
 print(f"  spend_rows={spend['row_count']}")
 print(f"  search_docs={search['count']}")
 print(f"  compare_diffs={compared['difference_count']}")
 print(f"  incomplete={missing['incomplete_count']}")
+print(f"  search_contracts={structured['row_count']}")
+print(f"  profile={profile['profile']['contract_id']}")
 """
     proc = subprocess.run(
         [sys.executable, "-c", script],
@@ -111,6 +121,8 @@ def test_production_tools_have_no_mock_branches() -> None:
         "def compare_contracts",
         "def check_missing_contract_fields",
         "def search_cloud_blob_contracts",
+        "def search_contracts",
+        "def get_contract_profile",
     ]
     for marker in tool_markers:
         start = source.index(marker)

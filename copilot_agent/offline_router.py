@@ -15,20 +15,53 @@ from typing import Any
 
 from langchain_core.tools import BaseTool
 
-from mcp_clients import bridge
-
 logger = logging.getLogger(__name__)
 
+INVOICE_OOS_MESSAGE = (
+    "Invoice/spend data is not part of this synthetic contract intelligence POC. "
+    "This requires a separate data-linkage POC."
+)
+
+# Hard out-of-scope guard for invoice / actual-payment systems (before tool selection).
+# SAP/Oracle alone are valid vendor names; only refuse when paired with invoice/payment/ERP cues.
+_INVOICE_OOS_RE = re.compile(
+    r"("
+    r"\binvoices?\b|"
+    r"\binvoice\s*match\w*|"
+    r"\bactual\s+spend\b|"
+    r"\bpayment\s+data\b|"
+    r"\bpaid\s+amounts?\b|"
+    r"\bpayment\s+history\b|"
+    r"\binvoice\s+spend\b|"
+    r"\bjde\b|"
+    r"\bnetsuite\b|"
+    r"\b(?:sap|oracle)\b.{0,40}\b(?:invoice|payment|erp|ap\b|accounts?\s+payable)\b|"
+    r"\b(?:invoice|payment|erp|ap\b|accounts?\s+payable)\b.{0,40}\b(?:sap|oracle)\b"
+    r")",
+    re.I,
+)
 _SPEND_RE = re.compile(
-    r"\b(spend|vendor|supplier|cost|po\b|purchase\s*order|financial|aggregate|rollup)\b",
+    r"\b(vendor\s+spend|supplier\s+spend|contract\s+value\s+rollup|po\b|purchase\s*order|"
+    r"financial\s+aggregate|spend\s+summary|spend\s+rollup)\b",
     re.I,
 )
 _EXPIRE_RE = re.compile(
-    r"\b(expir\w*|renew\w*|upcoming|deadline|contract\s*dates?|end\s*date)\b",
+    r"\b(expir\w*|upcoming|deadline|contract\s*dates?|end\s*date|need(?:s)?\s+action|"
+    r"next\s+\d+\s+days)\b",
     re.I,
 )
-_SEARCH_RE = re.compile(
-    r"\b(legal|liabilit\w*|clause|pdf|document|policy|blob|unstructured|search|contract\s*text)\b",
+_DOC_SEARCH_RE = re.compile(
+    r"\b(legal|liabilit\w*|clause|pdf|document|policy|blob|unstructured|contract\s*text)\b",
+    re.I,
+)
+_STRUCTURED_SEARCH_RE = re.compile(
+    r"\b(show\s+contracts?|list\s+contracts?|find\s+contracts?|search\s+contracts?|"
+    r"contracts?\s+for|overlapping\s+contracts?|unusual\s+payment\s+terms?|high\s+rates?|"
+    r"rate\s+card)\b",
+    re.I,
+)
+_PROFILE_RE = re.compile(
+    r"\b(details?\s+for\s+contract|contract\s+profile|show\s+details?|full\s+profile)\b",
     re.I,
 )
 _COMPARE_RE = re.compile(
@@ -37,7 +70,8 @@ _COMPARE_RE = re.compile(
 )
 _MISSING_RE = re.compile(
     r"\b(missing|incomplete|blank|null|data\s*quality|completeness|required\s*field|"
-    r"red[\s-]?flag|compliance|audit|indemnif\w*|liabilit\w*|sla)\b",
+    r"red[\s-]?flag|compliance|audit|indemnif\w*|liabilit\w*|sla|"
+    r"missing\s+renewal)\b",
     re.I,
 )
 _EXPOSURE_RE = re.compile(
@@ -48,7 +82,7 @@ _RENEWAL_RE = re.compile(
     r"\b(renew\w*|renegotiat\w*|terminat\w*|auto[\s-]?renew|strategy\s*sheet)\b",
     re.I,
 )
-_CONTRACT_ID_RE = re.compile(r"\b(?:CON|CNT)-\d+\b", re.I)
+_CONTRACT_ID_RE = re.compile(r"\b(?:CON|CNT|C)-\d+\b", re.I)
 _ANNUAL_COST_RE = re.compile(
     r"\b(?:annual(?:\s*contract)?\s*(?:cost|value)|acv)\s*[:=]?\s*\$?([\d,]+(?:\.\d+)?)\b",
     re.I,
@@ -59,8 +93,9 @@ _CONTRACT_TYPE_RE = re.compile(
     re.I,
 )
 _SUPPLIER_RE = re.compile(
-    r"\b(Microsoft|Amazon AWS|Amazon|Google Cloud|Google|Oracle|SAP|IBM|Salesforce|"
-    r"ServiceNow|Adobe|Cisco|VMware|Snowflake|Databricks|Accenture)\b",
+    r"\b(AlphaTech(?:\s+Services)?|Microsoft|Amazon AWS|Amazon|Google Cloud|Google|"
+    r"Oracle|SAP|IBM|Salesforce|ServiceNow|Adobe|Cisco|VMware|Snowflake|Databricks|"
+    r"Accenture|Dell)\b",
     re.I,
 )
 _CONTRACT_NAME_RE = re.compile(
@@ -805,36 +840,115 @@ def _lifecycle_renewal_strategy(expiring_raw: str, spend_raw: str | None = None)
     return "\n".join(lines)
 
 
+def is_invoice_out_of_scope(user_text: str) -> bool:
+    """Hard-match invoice/actual-spend intents before any tool selection."""
+    return bool(_INVOICE_OOS_RE.search(user_text or ""))
+
+
 def _choose_tools(user_text: str) -> list[str]:
     text = user_text.strip()
     chosen: list[str] = []
     if _COMPARE_RE.search(text):
         chosen.append("compare_contracts")
+    if _PROFILE_RE.search(text) or (
+        _CONTRACT_ID_RE.search(text)
+        and re.search(r"\b(detail|profile|show)\b", text, re.I)
+        and not _COMPARE_RE.search(text)
+    ):
+        chosen.append("get_contract_profile")
+    if _STRUCTURED_SEARCH_RE.search(text) or (
+        re.search(r"\bcontracts?\b", text, re.I)
+        and _SUPPLIER_RE.search(text)
+        and "compare_contracts" not in chosen
+        and "get_contract_profile" not in chosen
+    ):
+        chosen.append("search_contracts")
     if _MISSING_RE.search(text):
         chosen.append("check_missing_contract_fields")
-        chosen.append("search_cloud_blob_contracts")
-    if _EXPIRE_RE.search(text) or _RENEWAL_RE.search(text):
+        if "search_contracts" not in chosen:
+            chosen.append("search_contracts")
+    if _EXPIRE_RE.search(text) or (
+        _RENEWAL_RE.search(text) and not _MISSING_RE.search(text)
+    ):
         chosen.append("get_expiring_contracts")
-        chosen.append("get_vendor_spend_summary")
     if _SPEND_RE.search(text) or _EXPOSURE_RE.search(text):
+        # Contract-value rollups only — never for invoice intents (blocked earlier).
         chosen.append("get_vendor_spend_summary")
     if _EXPOSURE_RE.search(text):
         chosen.append("search_cloud_blob_contracts")
         chosen.append("get_expiring_contracts")
-    if _SEARCH_RE.search(text) or (
-        "contract" in text.lower()
-        and "compare_contracts" not in chosen
-        and "check_missing_contract_fields" not in chosen
-        and "get_expiring_contracts" not in chosen
-    ):
+    if _DOC_SEARCH_RE.search(text):
         chosen.append("search_cloud_blob_contracts")
     if not chosen:
-        chosen = ["get_vendor_spend_summary", "search_cloud_blob_contracts"]
+        chosen = ["search_contracts"]
+    # Invoice-related turns must never call spend rollups.
+    if is_invoice_out_of_scope(text):
+        return []
     return list(dict.fromkeys(chosen))
+
+
+def _summarize_search_contracts(raw: str, *, limit: int = 10) -> str:
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return f"Structured contract search\n{raw[:2000]}"
+    rows = payload.get("rows") or []
+    criteria = payload.get("criteria") or {}
+    lines = [
+        f"Structured contract search ({payload.get('row_count', len(rows))} rows)",
+        f"Filters: {criteria}" if any(criteria.values()) else "Filters: (none)",
+    ]
+    for row in rows[:limit]:
+        lines.append(
+            f"- {row.get('contract_id')} | {row.get('vendor_name')} | "
+            f"{row.get('contract_type')} | {row.get('status')} | "
+            f"ACV={row.get('annual_contract_value')} {row.get('currency')} | "
+            f"expires={row.get('expiration_date')} | "
+            f"payment_terms_days={row.get('payment_terms_days')} | "
+            f"rate_card_on_file={row.get('rate_card_on_file')}"
+        )
+    if len(rows) > limit:
+        lines.append(f"... {len(rows) - limit} more rows omitted")
+    lines.append("Source: synthetic_gold_contracts (MCP search_contracts)")
+    return "\n".join(lines)
+
+
+def _summarize_contract_profile(raw: str) -> str:
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return f"Contract profile\n{raw[:2000]}"
+    if payload.get("error"):
+        return f"Contract profile error: {payload.get('error')} ({payload.get('contract_id')})"
+    profile = payload.get("profile") or {}
+    missing = profile.get("missing_fields") or []
+    lines = [
+        f"Contract profile: {profile.get('contract_id')}",
+        f"- vendor: {profile.get('vendor_name')}",
+        f"- number: {profile.get('contract_number')}",
+        f"- type/status: {profile.get('contract_type')} / {profile.get('status')}",
+        f"- business_unit: {profile.get('business_unit')}",
+        f"- owner: {profile.get('contract_owner')}",
+        f"- effective → expiration: {profile.get('effective_date')} → {profile.get('expiration_date')}",
+        f"- renewal_date: {profile.get('renewal_date')}",
+        f"- ACV: {profile.get('annual_contract_value')} {profile.get('currency')}",
+        f"- payment_terms_days: {profile.get('payment_terms_days')}",
+        f"- rate_card_on_file: {profile.get('rate_card_on_file')}",
+        f"- supplier_risk_rating: {profile.get('supplier_risk_rating')}",
+        f"- missing_fields: {', '.join(missing) if missing else '(none)'}",
+        "Source: synthetic_gold_contracts (MCP get_contract_profile)",
+    ]
+    return "\n".join(lines)
 
 
 async def run_offline_turn(user_text: str) -> str:
     """Intent-route to MCP tools without calling Azure OpenAI."""
+    if is_invoice_out_of_scope(user_text):
+        return INVOICE_OOS_MESSAGE
+
+    # Lazy import so guardrail unit checks do not require MCP adapter stack.
+    from mcp_clients import bridge
+
     tools = _tool_map(await bridge.get_tools())
     selected = _choose_tools(user_text)
     contract_ids = _extract_contract_ids(user_text)
@@ -1013,6 +1127,68 @@ async def run_offline_turn(user_text: str) -> str:
                 sections.append(
                     _summarize_compare_payload(raw, risk_notes=risk_notes)
                 )
+            elif name == "search_contracts":
+                vendor = shared_filters.get("supplier_name")
+                if vendor and vendor.lower() == "alphatech":
+                    vendor = "AlphaTech Services"
+                raw = await _ainvoke_tool(
+                    tool,
+                    vendor=vendor,
+                    contract_type=shared_filters.get("contract_type"),
+                    max_rows=50,
+                )
+                sections.append(_summarize_search_contracts(raw))
+                # Highlight overlaps / unusual terms when asked.
+                try:
+                    payload = json.loads(raw)
+                    rows = payload.get("rows") or []
+                except json.JSONDecodeError:
+                    rows = []
+                if re.search(r"\boverlap", user_text, re.I) and rows:
+                    by_vendor: dict[str, list[dict[str, Any]]] = {}
+                    for row in rows:
+                        by_vendor.setdefault(str(row.get("vendor_name") or "?"), []).append(row)
+                    overlap_notes = []
+                    for vendor_name, vrows in by_vendor.items():
+                        if len(vrows) >= 2:
+                            ids = ", ".join(str(r.get("contract_id")) for r in vrows[:6])
+                            overlap_notes.append(
+                                f"- {vendor_name}: {len(vrows)} active/listed contracts ({ids})"
+                            )
+                    if overlap_notes:
+                        sections.append(
+                            "Overlapping / multi-contract vendor signal:\n"
+                            + "\n".join(overlap_notes)
+                        )
+                if re.search(r"\b(unusual\s+payment|high\s+rate)", user_text, re.I) and rows:
+                    flagged = []
+                    for row in rows:
+                        terms = row.get("payment_terms_days")
+                        acv = row.get("annual_contract_value")
+                        try:
+                            terms_n = float(terms) if terms is not None else 0
+                        except (TypeError, ValueError):
+                            terms_n = 0
+                        try:
+                            acv_n = float(acv) if acv is not None else 0
+                        except (TypeError, ValueError):
+                            acv_n = 0
+                        if terms_n >= 60 or acv_n >= 200000 or row.get("rate_card_on_file") is False:
+                            flagged.append(
+                                f"- {row.get('contract_id')}: payment_terms_days={terms}, "
+                                f"ACV={acv}, rate_card_on_file={row.get('rate_card_on_file')}"
+                            )
+                    sections.append(
+                        "Unusual payment terms / high-rate flags:\n"
+                        + ("\n".join(flagged[:10]) if flagged else "- none above thresholds")
+                    )
+            elif name == "get_contract_profile":
+                cid = contract_ids[0] if contract_ids else None
+                if not cid:
+                    sections.append("No contract_id detected for get_contract_profile.")
+                else:
+                    raw = await _ainvoke_tool(tool, contract_id=cid)
+                    sections.append(_summarize_contract_profile(raw))
             elif name == "check_missing_contract_fields":
                 raw = await _ainvoke_tool(tool, max_rows=100, **shared_filters)
                 sections.append(_summarize_missing_payload(raw))
@@ -1060,13 +1236,14 @@ async def run_offline_turn(user_text: str) -> str:
                             )
                         )
             elif name == "search_cloud_blob_contracts":
+                # Prefer structured metadata tools for catalog questions.
+                if "search_contracts" in selected or "get_contract_profile" in selected:
+                    continue
                 # Skip duplicate search when missing-field audit already fetched clauses.
                 if (
                     "check_missing_contract_fields" in selected
                     and _MISSING_RE.search(user_text)
-                    and any(
-                        "## Red-Flag Compliance Audit" in s for s in sections
-                    )
+                    and any("## Red-Flag Compliance Audit" in s for s in sections)
                 ):
                     continue
                 raw = await _ainvoke_tool(
@@ -1079,7 +1256,6 @@ async def run_offline_turn(user_text: str) -> str:
                 if _MISSING_RE.search(user_text) and not any(
                     "## Red-Flag Compliance Audit" in s for s in sections
                 ):
-                    # Clause-only audit path (no missing-field tool selected).
                     empty_missing = json.dumps(
                         {"incomplete_contracts": [], "checked_count": 0}
                     )

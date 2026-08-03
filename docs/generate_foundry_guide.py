@@ -105,6 +105,10 @@ def _build_pdf_from_markdown(md_text: str, path: Path) -> None:
     story.append(Paragraph("Azure AI Foundry Deployment Guide", styles["CoverTitle"]))
     story.append(HRFlowable(width="100%", thickness=1, color=TEAL, spaceBefore=4, spaceAfter=8))
     story.append(Paragraph(
+        "Optional future path — current POC runs Streamlit → Flask → FastMCP → synthetic Gold",
+        styles["Note"],
+    ))
+    story.append(Paragraph(
         "Part A = Azure Foundry portal steps &nbsp;&nbsp;|&nbsp;&nbsp; Part B = GitHub repo / deploy script",
         styles["BodyCustom"],
     ))
@@ -432,8 +436,8 @@ def _build_html(md_text: str, path: Path) -> None:
     <a class="download" href="VAL_CoPilot_Azure_Foundry_Deployment_Guide.pdf">Download PDF</a>
     <a class="download secondary" href="VAL_CoPilot_Azure_Foundry_Deployment_Guide.md">View Markdown</a>
   </p>
-  <div class="callout"><strong>Complete Part A (Azure Foundry portal) before Part B (deploy script).</strong>
-  The script cannot create the Foundry resource, project, or model deployment.</div>
+  <div class="callout"><strong>Optional future path.</strong> Current POC runtime is Streamlit → Flask → FastMCP → synthetic Gold.
+  Complete Part A (Azure Foundry portal) before Part B (deploy script). The script cannot create the Foundry resource, project, or model deployment.</div>
   {"".join(lines_out)}
 </body>
 </html>

@@ -1,4 +1,4 @@
-"""Offline staging checks for the mcp_server mock interceptor."""
+"""Offline staging checks for the mcp_server LinkSquares mock interceptor."""
 
 from __future__ import annotations
 
@@ -31,7 +31,6 @@ assert server._OFFLINE_MOCKS_ENABLED is True
 expiring = json.loads(server.get_expiring_contracts(days_ahead=3650, max_rows=50))
 assert expiring["row_count"] > 0, expiring
 assert "ContractID" in expiring["columns"]
-assert any("Gold_Vendor_Contracts".lower() in c.lower() or True for c in expiring["columns"])
 
 spend = json.loads(server.get_vendor_spend_summary(max_rows=50))
 assert spend["row_count"] > 0, spend
@@ -82,27 +81,27 @@ assert all(
 health = json.loads(server.fabric_health_check())
 assert health["status"] == "ok", health
 
-structured = json.loads(server.search_contracts(vendor="AlphaTech Services", max_rows=50))
+structured = json.loads(server.search_contracts(vendor="Microsoft", max_rows=50))
 assert structured["row_count"] >= 3, structured
-assert any(r.get("contract_id") == "C-1001" for r in structured["rows"])
+assert any(r.get("contract_id") == "CON-0002" for r in structured["rows"])
 
-profile = json.loads(server.get_contract_profile("C-1001"))
-assert profile.get("profile", {}).get("contract_id") == "C-1001", profile
+profile = json.loads(server.get_contract_profile("CON-0002"))
+assert profile.get("profile", {}).get("contract_id") == "CON-0002", profile
 assert "missing_fields" in profile.get("profile", {})
 
-overlaps = json.loads(server.find_overlaps(vendor="AlphaTech Services", max_rows=50))
+overlaps = json.loads(server.find_overlaps(vendor="Microsoft", max_rows=50))
 assert overlaps["row_count"] >= 1, overlaps
 pair_ids = {
-    (row.get("contract_a"), row.get("contract_b")) for row in overlaps["rows"]
+    frozenset({row.get("contract_a"), row.get("contract_b")}) for row in overlaps["rows"]
 }
-assert ("C-1001", "C-1002") in pair_ids or ("C-1002", "C-1001") in pair_ids
+assert frozenset({"CON-0024", "CON-0029"}) in pair_ids, pair_ids
 
-risk = json.loads(server.explain_contract_risk(contract_id="C-1002"))
+risk = json.loads(server.explain_contract_risk(contract_id="CON-0011"))
 assert risk["row_count"] >= 1, risk
 exp = risk["explanations"][0]
 assert "known_facts" in exp and "computed_risks" in exp
 codes = {r.get("code") for r in exp["computed_risks"]}
-assert "unusual_payment_terms" in codes or "high_contract_value_outlier" in codes, codes
+assert "unusual_payment_terms" in codes, codes
 
 print("offline interceptor OK")
 print(f"  expiring_rows={expiring['row_count']}")
@@ -150,9 +149,25 @@ def test_production_tools_have_no_mock_branches() -> None:
         body = rest if next_def < 0 else rest[:next_def]
         assert "USE_OFFLINE_MOCKS" not in body, f"{marker} contains mock conditional"
         assert "test_fixtures" not in body, f"{marker} references fixtures directly"
+        assert "LinSquare_Contracts" not in body, f"{marker} references fixtures directly"
     print("production tools are mock-free")
 
 
+def test_linksquares_fixture_files_present() -> None:
+    assert (ROOT / "LinSquare_Contracts_100_Updated_30bb.json").is_file()
+    assert (ROOT / "agreement_9a06.json").is_file()
+    assert not (ROOT / "test_fixtures.json").exists()
+    assert not (ROOT / "Test_contracts_0397.json").exists()
+    from linksquares_fixtures import build_offline_fixture_tables
+
+    tables = build_offline_fixture_tables()
+    assert len(tables["Gold_Vendor_Contracts"]) == 100
+    assert tables["Gold_Vendor_Spend"]
+    assert tables["Azure_Search_Documents"]
+    print("linksquares fixture files OK")
+
+
 if __name__ == "__main__":
+    test_linksquares_fixture_files_present()
     test_production_tools_have_no_mock_branches()
     test_offline_interceptor_roundtrip()

@@ -71,11 +71,22 @@ def find_overlapping_contracts(
             continue
         by_vendor.setdefault(name.lower(), []).append(row)
 
+    # LinkSquares samples carry OverlapFlag. When present, only Yes/Yes pairs
+    # are reported so long projected terms do not flood the overlap tool.
+    dataset_uses_overlap_flag = any(
+        str(row.get("OverlapFlag") or "").strip() != "" for row in rows
+    )
+
     overlaps: list[dict[str, Any]] = []
     for vendor_rows in by_vendor.values():
         for i in range(len(vendor_rows)):
             for j in range(i + 1, len(vendor_rows)):
                 left, right = vendor_rows[i], vendor_rows[j]
+                if dataset_uses_overlap_flag:
+                    flag_a = str(left.get("OverlapFlag") or "").strip().lower()
+                    flag_b = str(right.get("OverlapFlag") or "").strip().lower()
+                    if flag_a != "yes" or flag_b != "yes":
+                        continue
                 window = _date_overlap(
                     _parse_date(left.get("EffectiveDate")),
                     _parse_date(left.get("ExpirationDate")),
@@ -91,6 +102,13 @@ def find_overlapping_contracts(
                 bu_a = str(a.get("BusinessUnit") or "")
                 bu_b = str(b.get("BusinessUnit") or "")
                 bu = bu_a if bu_a == bu_b else f"{bu_a}|{bu_b}".strip("|")
+                why = (
+                    "Same vendor has concurrent effective→expiration windows "
+                    f"({a.get('ContractID')} {a.get('EffectiveDate')}→{a.get('ExpirationDate')} "
+                    f"overlaps {b.get('ContractID')} {b.get('EffectiveDate')}→{b.get('ExpirationDate')})"
+                )
+                if dataset_uses_overlap_flag:
+                    why += " (OverlapFlag=Yes on both contracts)"
                 overlaps.append(
                     {
                         "vendor": a.get("SupplierName"),
@@ -99,11 +117,7 @@ def find_overlapping_contracts(
                         "contract_b": b.get("ContractID"),
                         "overlap_start": window[0].isoformat(),
                         "overlap_end": window[1].isoformat(),
-                        "why_flagged": (
-                            "Same vendor has concurrent effective→expiration windows "
-                            f"({a.get('ContractID')} {a.get('EffectiveDate')}→{a.get('ExpirationDate')} "
-                            f"overlaps {b.get('ContractID')} {b.get('EffectiveDate')}→{b.get('ExpirationDate')})"
-                        ),
+                        "why_flagged": why,
                         "source": SOURCE_LABEL,
                     }
                 )

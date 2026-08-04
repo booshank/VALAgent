@@ -232,7 +232,7 @@ def build():
     story.append(arrow(s))
     story.append(layer_box(
         "LAYER 4 — Synthetic Gold Data",
-        "mcp_server/test_fixtures.json (offline) · Future: Fabric SQL / LinkSquares behind same repository interface",
+        "mcp_server/LinSquare_Contracts_100_Updated_30bb.json + agreement_9a06.json (offline) · Future: live Fabric SQL / LinkSquares behind same repository interface",
         SOFT_AMBER, s,
     ))
     story.append(Paragraph(
@@ -321,7 +321,7 @@ def build():
     story.append(bullets([
         "<b>find_overlaps</b> — same-vendor Active/Pending contracts with overlapping date windows",
         "<b>explain_contract_risk</b> — returns known_facts, computed_risks, missing_data, recommended_review_action",
-        "Demo seed: AlphaTech C-1001 ∩ C-1002 overlap (2025-01-01 → 2025-12-31)",
+        "Demo seed: Microsoft CON-0024 ∩ CON-0029 overlap (OverlapFlag=Yes)",
     ], s["bullet"]))
     story.append(PageBreak())
 
@@ -368,14 +368,14 @@ def build():
     ], s["bullet"]))
     story.append(Paragraph("B. Overlap / risk path", s["h2"]))
     story.append(bullets([
-        "UI → Router: “Any overlapping AlphaTech contracts?”",
+        "UI → Router: “Any overlapping Microsoft contracts?”",
         "Router → find_overlaps / explain_contract_risk / search_contracts",
         "MCP → risk helpers over repository rows",
         "Router → Red-Flag Audit + ## Recommendation",
     ], s["bullet"]))
     story.append(Paragraph("C. OOS short-circuit", s["h2"]))
     story.append(bullets([
-        "UI → Router: “Show invoice totals for AlphaTech”",
+        "UI → Router: “Show invoice totals for Microsoft”",
         "Router detects invoice/spend intent <b>before tools</b>",
         "Exact OOS message returned; no MCP calls",
     ], s["bullet"]))

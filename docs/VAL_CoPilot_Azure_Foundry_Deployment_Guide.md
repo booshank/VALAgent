@@ -154,7 +154,7 @@ For fixture-backed demos, set `USE_OFFLINE_MOCKS=true` on the tool-host process 
 
 | Data system | Typical need |
 | --- | --- |
-| Synthetic fixtures (POC) | `USE_OFFLINE_MOCKS=true` + `mcp_server/test_fixtures.json` |
+| Synthetic fixtures (POC) | `USE_OFFLINE_MOCKS=true` + LinkSquares sample JSON in `mcp_server/` |
 | Microsoft Fabric SQL (optional) | Identity can connect via `ActiveDirectoryDefault` to the Gold warehouse |
 | Azure AI Search (optional) | Search index reader (or API key in `.env` for key-based access) |
 
@@ -245,7 +245,7 @@ Map values collected in Part A:
 | `AZURE_FOUNDRY_CONNECTION_STRING` | Yes | Project endpoint from **A6** |
 | `AZURE_FOUNDRY_MODEL_DEPLOYMENT` or `AZURE_OPENAI_DEPLOYMENT_NAME` | Yes | Exact deployment name from **A3** |
 | `AZURE_FOUNDRY_AGENT_NAME` | No | Desired agent name (default `val-copilot`) |
-| `USE_OFFLINE_MOCKS` | POC demos | `true` to use `test_fixtures.json` instead of live Fabric |
+| `USE_OFFLINE_MOCKS` | POC demos | `true` to use LinkSquares sample fixtures instead of live Fabric |
 | `FABRIC_SQL_SERVER` / `FABRIC_SQL_DATABASE` | Live runtime | Fabric warehouse (optional) |
 | `AZURE_SEARCH_ENDPOINT` / API key / index | Live runtime | Azure AI Search (optional) |
 
@@ -343,8 +343,8 @@ Return to [ai.azure.com](https://ai.azure.com) → your project:
    - **Model** matches the deployment from **A3**
 4. Use the **Agent playground** (if available) with demo prompts from `docs/demo_script.md`, for example:
    - “Which contracts expire in 90 days?”
-   - “Any overlapping AlphaTech contracts?”
-   - “Show invoice totals for AlphaTech” → expect exact OOS message (no tool calls)
+   - “Any overlapping Microsoft contracts?”
+   - “Show invoice totals for Microsoft” → expect exact OOS message (no tool calls)
 5. If tool calls fail in playground, verify fixture/offline flags or Fabric/Search credentials and that the host executing function tools can reach those services.
 
 ---
@@ -355,7 +355,7 @@ The Foundry-managed agent stores **instructions + tool definitions**. Function t
 **implementations** are the Python MCP functions from this repo and run in the
 process that handles tool calls.
 
-- **Preferred for this POC:** `USE_OFFLINE_MOCKS=true` against `mcp_server/test_fixtures.json`
+- **Preferred for this POC:** `USE_OFFLINE_MOCKS=true` against `mcp_server/LinSquare_Contracts_100_Updated_30bb.json` + `agreement_9a06.json`
 - **Optional live backends:** Fabric SQL (ODBC Driver 18 + ActiveDirectoryDefault) and Azure AI Search
 - **Hard OOS:** invoice/spend-actuals questions must return the exact POC OOS string and must not call spend tools as if they were invoice APIs
 - Architecture / process flow: `docs/VAL_CoPilot_Architecture_and_Process_Flow.pdf` (and `.pptx`)

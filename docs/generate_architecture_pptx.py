@@ -189,10 +189,10 @@ def slide_request_flow(prs: Presentation) -> None:
         slide, Inches(0.4), Inches(3.5), Inches(12.5), Inches(3.1), LIGHT, GRAY,
         "Intent → primary tool",
         "Show contracts for vendor → search_contracts\n"
-        "Details for C-1001 → get_contract_profile\n"
+        "Details for CON-0002 → get_contract_profile\n"
         "Overlapping contracts → find_overlaps\n"
         "Unusual payment / high rates → explain_contract_risk\n"
-        "Compare C-1001 vs C-1002 → compare_contracts\n"
+        "Compare CON-0001 vs CON-0002 → compare_contracts\n"
         "Need action next 90 days → get_expiring_contracts\n"
         "Missing renewal info → check_missing_contract_fields\n"
         "Invoice spend also? → exact OOS refusal (no tools)",
@@ -227,7 +227,7 @@ def slide_new_tools(prs: Presentation) -> None:
         ("find_overlaps", "Same-vendor date overlaps\ncontract_a/b + window + why", ORANGE_LIGHT, ORANGE, 8.8, 1.3),
         ("explain_contract_risk", "known_facts vs computed_risks\nmissing_data + review action", PURPLE_LIGHT, PURPLE, 0.4, 4.0),
         ("Invoice OOS guardrail", "Exact refusal before tools\nNever treat ACV as invoices", RED_LIGHT, RED, 4.6, 4.0),
-        ("Demo fixtures", "AlphaTech C-1001 / C-1002 / C-1003\nDeliberate overlaps & Net 90", GOLD_LIGHT, GOLD, 8.8, 4.0),
+        ("Demo fixtures", "LinkSquares 100 contracts\nMicrosoft/AWS overlaps & Net 180", GOLD_LIGHT, GOLD, 8.8, 4.0),
     ]
     for title, sub, fill, line, x, y in tools:
         add_box(slide, Inches(x), Inches(y), Inches(3.9), Inches(2.3), fill, line, title, sub, 14, 12)
@@ -239,7 +239,7 @@ def slide_risk_flow(prs: Presentation) -> None:
     add_title_bar(slide, "6. Overlap & Risk Explanation Process Flow", "Separate facts from computed risks — no invented findings")
     add_box(slide, Inches(0.4), Inches(1.4), Inches(4.0), Inches(5.2), ORANGE_LIGHT, ORANGE,
             "find_overlaps",
-            "1. Load contracts via repository\n2. Group by vendor\n3. Intersect effective→expiration\n4. Emit overlap_start/end\n5. why_flagged + source\n\nDemo: C-1001 ∩ C-1002",
+            "1. Load contracts via repository\n2. Group by vendor\n3. Prefer OverlapFlag=Yes pairs\n4. Emit overlap_start/end\n5. why_flagged + source\n\nDemo: CON-0024 ∩ CON-0029",
             15, 12)
     add_box(slide, Inches(4.7), Inches(1.4), Inches(4.0), Inches(5.2), PURPLE_LIGHT, PURPLE,
             "explain_contract_risk",
@@ -311,7 +311,7 @@ def slide_summary(prs: Presentation) -> None:
     items = [
         ("Safe", "Invoice/AP/JDE/NetSuite asks → exact OOS refusal; ACV never labeled as invoices", RED, RED_LIGHT),
         ("Structured tools", "search / profile / overlaps / risk via ContractRepository", GREEN, GREEN_LIGHT),
-        ("Deterministic demo", "AlphaTech C-1001..C-1003 + docs/demo_script.md", TEAL, TEAL_LIGHT),
+        ("Deterministic demo", "LinkSquares CON-* fixtures + docs/demo_script.md", TEAL, TEAL_LIGHT),
         ("Replaceable data", "ContractRepository ready for LinkSquares later", PURPLE, PURPLE_LIGHT),
         ("Foundry optional", "Current runtime is Flask+LangChain/offline router, not Foundry-first", GOLD, GOLD_LIGHT),
     ]

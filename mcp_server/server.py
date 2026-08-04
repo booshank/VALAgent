@@ -31,11 +31,12 @@ _FIXTURE_PATCHES: list[Any] = []
 
 
 def _load_offline_fixtures() -> dict[str, Any]:
-    fixture_path = Path(__file__).resolve().parent / "test_fixtures.json"
-    with fixture_path.open(encoding="utf-8") as handle:
-        payload = json.load(handle)
+    """Build offline Gold tables from LinkSquares POC sample JSON files."""
+    from linksquares_fixtures import build_offline_fixture_tables
+
+    payload = build_offline_fixture_tables()
     if not isinstance(payload, dict):
-        raise ValueError("test_fixtures.json must be a JSON object of table/list payloads")
+        raise ValueError("LinkSquares fixture builder must return a table/list payload dict")
     return payload
 
 

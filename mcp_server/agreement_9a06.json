@@ -1,0 +1,13 @@
+{
+  "AgreementCategory": "Technology",
+  "AgreementSubCategory": "Cloud Infrastructure",
+  "ContractTermMonths": 36,
+  "AutoRenewalFlag": true,
+  "AutoRenewalPeriodMonths": 12,
+  "NoticePeriodDays": 90,
+  "Jurisdiction": "United States",
+  "GoverningLaw": "California",
+  "ConfidentialityClause": true,
+  "DataPrivacyClause": true,
+  "SLAIncluded": true
+}

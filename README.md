@@ -83,10 +83,11 @@ Set in the root `.env`:
 USE_OFFLINE_MOCKS=true
 ```
 
-When enabled, `mcp_server/server.py` loads `mcp_server/test_fixtures.json` and
-patches `pyodbc.connect`, `pandas.read_sql`, and `azure.search.documents.SearchClient`
-before the production tools run. Tool method bodies stay unchanged and still call
-normal SQL / Azure SDK paths.
+When enabled, `mcp_server/server.py` loads the LinkSquares POC samples
+(`LinSquare_Contracts_100_Updated_30bb.json` + `agreement_9a06.json`) via
+`linksquares_fixtures.py` and patches `pyodbc.connect`, `pandas.read_sql`, and
+`azure.search.documents.SearchClient` before the production tools run. Tool
+method bodies stay unchanged and still call normal SQL / Azure SDK paths.
 
 `USE_OFFLINE_MOCKS=true` (or `AZURE_OPENAI_FORCE_OFFLINE=true`) also switches the
 Cognitive Routing Agent to an offline MCP tool router so Streamlit works when

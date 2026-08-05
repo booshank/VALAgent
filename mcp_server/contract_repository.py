@@ -2,8 +2,8 @@
 ContractRepository abstraction for the Synthetic Contract Intelligence POC.
 
 Today: FabricContractRepository reads Gold_Vendor_Contracts via Fabric SQL
-(or the offline fixture interceptor). Later: swap implementation for
-LinkSquares / other CLM sources without changing MCP tool signatures.
+(or the offline LinkSquares sample interceptor). Later: swap implementation
+for live LinkSquares / other CLM sources without changing MCP tool signatures.
 """
 
 from __future__ import annotations

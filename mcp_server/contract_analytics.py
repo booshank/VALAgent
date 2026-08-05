@@ -481,6 +481,12 @@ PROFILE_REQUIRED_FIELDS: tuple[str, ...] = DEFAULT_REQUIRED_FIELDS + (
 def _payment_terms_days(row: dict[str, Any]) -> Any:
     if not _is_missing(row.get("PaymentTermsDays")):
         return row.get("PaymentTermsDays")
+    # LinkSquares samples often store "Net 30" / "Net 180" in PaymentTerms.
+    payment_terms = row.get("PaymentTerms")
+    if not _is_missing(payment_terms):
+        match = re.search(r"\bnet\s*(\d+)\b", str(payment_terms), flags=re.IGNORECASE)
+        if match:
+            return int(match.group(1))
     if not _is_missing(row.get("NoticePeriodDays")):
         return row.get("NoticePeriodDays")
     return None

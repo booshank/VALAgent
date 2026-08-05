@@ -1,41 +1,45 @@
 # Synthetic Contract Intelligence Tool-Layer POC — Demo Script
 
 Deterministic offline demo (`USE_OFFLINE_MOCKS=true`).  
-Current path: Streamlit → Flask `/api/messages` → offline cognitive router → FastMCP tools → synthetic Gold fixtures.
+Current path: Streamlit → Flask `/api/messages` → offline cognitive router → FastMCP tools → LinkSquares sample fixtures.
+
+Fixture sources:
+- `mcp_server/LinSquare_Contracts_100_Updated_30bb.json` (100 contracts)
+- `mcp_server/agreement_9a06.json` (shared agreement metadata)
 
 This is **not** an Azure AI Foundry-first runtime.
 
 ---
 
-## 1. Show contracts for AlphaTech Services
+## 1. Show contracts for Microsoft
 
 | Item | Detail |
 | --- | --- |
-| **Expected tool** | `search_contracts(vendor="AlphaTech Services")` |
+| **Expected tool** | `search_contracts(vendor="Microsoft")` |
 | **Expected behavior** | Structured metadata list (not Azure AI Search docs). Stable fields including contract_id, vendor_name, dates, ACV, payment_terms_days, rate_card_on_file. |
-| **Sample expected output** | Rows for `C-1001`, `C-1002`, `C-1003` under vendor AlphaTech Services. |
-| **Success looks like** | At least 3 AlphaTech contracts with key commercial fields; source cited as `synthetic_gold_contracts`. |
+| **Sample expected output** | Multiple Microsoft rows (e.g. `CON-0002`, `CON-0006`, `CON-0010`). |
+| **Success looks like** | Structured Microsoft contracts with commercial fields; source cited as `synthetic_gold_contracts`. |
 
 ---
 
-## 2. Show details for Contract C-1001
+## 2. Show details for Contract CON-0002
 
 | Item | Detail |
 | --- | --- |
-| **Expected tool** | `get_contract_profile(contract_id="C-1001")` |
+| **Expected tool** | `get_contract_profile(contract_id="CON-0002")` |
 | **Expected behavior** | One normalized profile with missing_fields array. |
-| **Sample expected output** | Profile for C-1001 / AlphaTech Managed Services Master; ACV 120000 USD; payment_terms_days=30; rate_card_on_file=true; missing_fields empty or listed. |
+| **Sample expected output** | Profile for CON-0002 / Microsoft Agreement 2; rate_card_on_file=true; ActionRequired=30 Days. |
 | **Success looks like** | Single-contract profile, not a multi-row search dump. |
 
 ---
 
-## 3. Compare C-1001 and C-1002
+## 3. Compare CON-0001 and CON-0002
 
 | Item | Detail |
 | --- | --- |
-| **Expected tool** | `compare_contracts(contract_refs="C-1001,C-1002")` |
+| **Expected tool** | `compare_contracts(contract_refs="CON-0001,CON-0002")` |
 | **Expected behavior** | Field-level compare + `## Recommendation` style decision notes when LLM path is used; offline router emits comparison tables / ranking notes. |
-| **Sample expected output** | Differences on type (Managed Services vs Professional Services), ACV (120000 vs 240000), payment terms (30 vs 90), rate card flags. |
+| **Sample expected output** | Differences on vendor (AWS vs Microsoft), payment terms, contract value, OpCo/business unit. |
 | **Success looks like** | Clear side-by-side deltas and an explicit preference / risk call. |
 
 ---
@@ -45,8 +49,8 @@ This is **not** an Azure AI Foundry-first runtime.
 | Item | Detail |
 | --- | --- |
 | **Expected tool** | `get_expiring_contracts(days_ahead≈90..365)` |
-| **Expected behavior** | Near-term expirations / renewal action list from synthetic Gold dates. |
-| **Sample expected output** | Includes AlphaTech C-1001/C-1002/C-1003 when inside the lookahead window used by the offline router. |
+| **Expected behavior** | Near-term expirations / renewal action list from projected LinkSquares renewal dates. |
+| **Sample expected output** | Includes ActionRequired 30/60/90 Day contracts such as CON-0001..CON-0015 when inside the lookahead window. |
 | **Success looks like** | Actionable expiry list with vendor + dates (not invoice payments). |
 
 ---
@@ -56,8 +60,8 @@ This is **not** an Azure AI Foundry-first runtime.
 | Item | Detail |
 | --- | --- |
 | **Expected tool** | `check_missing_contract_fields` and/or `search_contracts` + profile missing_fields |
-| **Expected behavior** | Surfaces contracts with blank/null RenewalDate (demo seed: `C-1003`). |
-| **Sample expected output** | C-1003 AlphaTech Support Retainer flagged for missing RenewalDate (and possibly ContractOwner). |
+| **Expected behavior** | Surfaces contracts with blank/null RenewalDate (sample seed: `CON-0016`..`CON-0020`). |
+| **Sample expected output** | Those IDs flagged for missing RenewalDate / EffectiveDate / ExpirationDate. |
 | **Success looks like** | Explicit missing-field list; no fabricated renewal dates. |
 
 ---
@@ -67,9 +71,9 @@ This is **not** an Azure AI Foundry-first runtime.
 | Item | Detail |
 | --- | --- |
 | **Expected tool** | `find_overlaps` |
-| **Expected behavior** | Same-vendor effective→expiration window overlaps from structured Gold data. |
-| **Sample expected output** | AlphaTech pair `C-1001` vs `C-1002` with overlap_start/overlap_end and why_flagged. |
-| **Success looks like** | Deliberate overlap cases returned with stable fields; source `synthetic_gold_contracts`. |
+| **Expected behavior** | Same-vendor overlaps where LinkSquares `OverlapFlag=Yes` on both contracts. |
+| **Sample expected output** | Microsoft `CON-0024` vs `CON-0029`; also Oracle / AWS / Accenture flagged pairs. |
+| **Success looks like** | Flagged overlap cases with stable fields; source `synthetic_gold_contracts`. |
 
 ---
 
@@ -79,7 +83,7 @@ This is **not** an Azure AI Foundry-first runtime.
 | --- | --- |
 | **Expected tool** | `explain_contract_risk` |
 | **Expected behavior** | Structured known_facts / computed_risks / missing_data / recommended_review_action. No invented risks. |
-| **Sample expected output** | C-1002 includes unusual_payment_terms (Net 90), high_contract_value_outlier and/or missing_rate_card, plus overlapping_contract where applicable. |
+| **Sample expected output** | `CON-0011` (Cisco, Net 180) includes unusual_payment_terms; overlap-flagged IDs may also show overlapping_contract. |
 | **Success looks like** | Grounded risk explanation separating facts from computed flags. |
 
 ---

@@ -100,6 +100,98 @@ print(json.dumps({"contract_id": profile["contract_id"], "missing_fields": profi
     print("get_contract_profile OK", out)
 
 
+def test_compare_contracts_any_ids_and_nway() -> None:
+    out = _run_mcp_snippet(
+        r"""
+import json, server
+
+# Arbitrary pairwise (not the first two catalog rows)
+pair = json.loads(server.compare_contracts(contract_refs="CON-0005,CON-0088"))
+assert pair.get("error") is None, pair
+assert {pair.get("left_contract_id"), pair.get("right_contract_id")} == {"CON-0005", "CON-0088"}
+assert pair.get("difference_count", 0) > 0
+
+# Explicit 4-way
+nway = json.loads(
+    server.compare_contracts(contract_refs="CON-0005,CON-0010,CON-0020,CON-0030")
+)
+assert nway.get("error") is None, nway
+assert nway.get("mode") == "multi" or nway.get("contract_count") == 4
+assert len(nway.get("contracts") or []) == 4
+assert nway.get("difference_count", 0) > 0
+ids = {row.get("ContractID") for row in nway["contracts"]}
+assert ids == {"CON-0005", "CON-0010", "CON-0020", "CON-0030"}
+
+# Supplier expansion
+expanded = json.loads(
+    server.compare_contracts(
+        supplier_names="Microsoft",
+        expand_supplier_matches=True,
+        max_contracts=4,
+    )
+)
+assert expanded.get("error") is None, expanded
+assert len(expanded.get("contracts") or []) == 4
+assert all(row.get("SupplierName") == "Microsoft" for row in expanded["contracts"])
+
+print(json.dumps({
+    "pair": [pair.get("left_contract_id"), pair.get("right_contract_id")],
+    "nway": sorted(ids),
+    "expanded": [row.get("ContractID") for row in expanded["contracts"]],
+}))
+"""
+    )
+    print("compare_contracts any/n-way OK", out)
+
+
+def test_offline_router_compare_routing() -> None:
+    from offline_router import (
+        _build_compare_kwargs_from_text,
+        _extract_contract_ids,
+        _extract_suppliers,
+        _split_compare_targets,
+    )
+
+    q = "Compare CON-0005 vs CON-0010 vs CON-0020"
+    assert _extract_contract_ids(q) == ["CON-0005", "CON-0010", "CON-0020"]
+    assert _split_compare_targets(q) == ["CON-0005", "CON-0010", "CON-0020"]
+    kwargs = _build_compare_kwargs_from_text(
+        q,
+        contract_ids=_extract_contract_ids(q),
+        suppliers=_extract_suppliers(q),
+        contract_names=[],
+        contract_types=[],
+        annual_costs=[],
+    )
+    assert kwargs["contract_refs"] == "CON-0005,CON-0010,CON-0020"
+
+    q2 = "Compare AWS, Microsoft, and Cisco"
+    assert set(_extract_suppliers(q2)) >= {"AWS", "Microsoft", "Cisco"}
+    kwargs2 = _build_compare_kwargs_from_text(
+        q2,
+        contract_ids=[],
+        suppliers=_extract_suppliers(q2),
+        contract_names=[],
+        contract_types=[],
+        annual_costs=[],
+    )
+    names = [n.strip() for n in kwargs2["supplier_names"].split(",")]
+    assert set(names) >= {"AWS", "Microsoft", "Cisco"}
+
+    q3 = "Compare all Microsoft contracts"
+    kwargs3 = _build_compare_kwargs_from_text(
+        q3,
+        contract_ids=[],
+        suppliers=_extract_suppliers(q3),
+        contract_names=[],
+        contract_types=[],
+        annual_costs=[],
+    )
+    assert kwargs3.get("expand_matches") is True
+    assert "CON-0001,CON-0002" not in str(kwargs3)
+    print("offline compare routing OK", kwargs, kwargs2, kwargs3)
+
+
 def test_oracle_vendor_not_blocked() -> None:
     from offline_router import _choose_tools, is_invoice_out_of_scope
 
@@ -177,6 +269,8 @@ if __name__ == "__main__":
     test_invoice_guardrail_hard_match()
     test_search_contracts_microsoft()
     test_get_contract_profile_con0002()
+    test_compare_contracts_any_ids_and_nway()
+    test_offline_router_compare_routing()
     test_oracle_vendor_not_blocked()
     test_find_overlaps_tool_and_routing()
     test_explain_contract_risk_tool_and_routing()

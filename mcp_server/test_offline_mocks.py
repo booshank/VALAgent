@@ -53,6 +53,22 @@ multi = json.loads(
 assert multi.get("contract_count") == 3 or len(multi.get("contracts") or []) == 3, multi
 assert multi.get("field_matrix"), multi
 
+# Arbitrary non-leading IDs + supplier expansion
+later = json.loads(server.compare_contracts(contract_refs="CON-0044,CON-0077,CON-0090"))
+assert later.get("error") is None, later
+assert len(later.get("contracts") or []) == 3, later
+
+expanded = json.loads(
+    server.compare_contracts(
+        supplier_names="AWS",
+        expand_supplier_matches=True,
+        max_contracts=3,
+    )
+)
+assert expanded.get("error") is None, expanded
+assert len(expanded.get("contracts") or []) == 3, expanded
+assert all(r.get("SupplierName") == "AWS" for r in expanded["contracts"])
+
 by_supplier = json.loads(
     server.compare_contracts(supplier_name_a="Microsoft", supplier_name_b="Oracle")
 )

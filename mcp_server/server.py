@@ -393,8 +393,8 @@ def _build_side_criteria_list(
 
     multi_len = max(len(refs), len(suppliers), len(names), len(types), len(costs), 0)
     sides: list[dict[str, Any]] = []
-    if multi_len >= 2:
-        for idx in range(multi_len):
+    if multi_len >= 1 and (refs or suppliers or names or types or costs):
+        for idx in range(max(multi_len, 1)):
             side = build_criteria(
                 contract_ref=refs[idx] if idx < len(refs) else None,
                 supplier_name=suppliers[idx] if idx < len(suppliers) else None,
@@ -404,7 +404,8 @@ def _build_side_criteria_list(
             )
             if side:
                 sides.append(side)
-        return sides
+        if sides:
+            return sides
 
     left = build_criteria(
         contract_ref=contract_ref_a,
@@ -440,6 +441,8 @@ def compare_contracts(
     contract_type_b: str | None = None,
     annual_cost_a: float | None = None,
     annual_cost_b: float | None = None,
+    max_contracts: int = 12,
+    expand_supplier_matches: bool = False,
 ) -> str:
     """
     Compare two or more vendor contracts field-by-field from the Fabric Gold layer.
@@ -451,8 +454,9 @@ def compare_contracts(
     ContractType, and/or AnnualContractValue.
 
     Args:
-        contract_refs: Comma-separated ContractIDs/Numbers (2+), e.g. CON-0001,CON-0002,CON-0003.
-        supplier_names: Comma-separated supplier names for N-way compare.
+        contract_refs: Comma-separated ContractIDs/Numbers (2+), e.g. CON-0001,CON-0005,CON-0010.
+        supplier_names: Comma-separated supplier names for N-way compare (one contract per vendor
+            unless expand_supplier_matches is true).
         contract_names: Comma-separated contract names for N-way compare.
         contract_types: Comma-separated contract types for N-way compare.
         annual_costs: Comma-separated annual costs for N-way compare.
@@ -466,6 +470,9 @@ def compare_contracts(
         contract_type_b: Legacy right contract type.
         annual_cost_a: Legacy left annual contract value.
         annual_cost_b: Legacy right annual contract value.
+        max_contracts: Cap for N-way / supplier expansion (default 12).
+        expand_supplier_matches: When true and a single supplier filter is provided,
+            compare up to max_contracts matching contracts for that supplier.
 
     Returns:
         JSON string with N-way field matrix (and pairwise compatibility fields when N=2).
@@ -488,14 +495,47 @@ def compare_contracts(
         annual_cost_a=annual_cost_a,
         annual_cost_b=annual_cost_b,
     )
+    limit = max(2, min(int(max_contracts or 12), 25))
+
+    # Single-supplier expansion: compare many contracts for one vendor.
+    if (
+        expand_supplier_matches
+        and len(side_criteria) == 1
+        and "supplier_name" in side_criteria[0]
+        and len(side_criteria[0]) == 1
+    ):
+        matches = filter_contracts(rows, side_criteria[0])[:limit]
+        if len(matches) < 2:
+            return json.dumps(
+                {
+                    "error": "Need at least two contracts for the supplier to compare",
+                    "side_criteria": side_criteria,
+                    "match_count": len(matches),
+                },
+                default=str,
+            )
+        result = compare_many_contract_rows(matches)
+        result["side_criteria"] = side_criteria
+        result["expanded_supplier"] = side_criteria[0].get("supplier_name")
+        result["contract_count"] = len(matches)
+        return json.dumps(result, default=str)
+
     if len(side_criteria) < 2:
         return json.dumps(
             {
                 "error": "Provide at least two contract lookup sides for comparison",
                 "side_criteria": side_criteria,
+                "hint": (
+                    "Pass comma-separated contract_refs for any IDs (not only the first two), "
+                    "or set expand_supplier_matches=true with one supplier_names value."
+                ),
             },
             default=str,
         )
+
+    # Cap extremely large N-way requests.
+    if len(side_criteria) > limit:
+        side_criteria = side_criteria[:limit]
 
     resolved_rows: list[dict[str, Any]] = []
     resolved_meta: list[dict[str, Any]] = []
@@ -506,7 +546,13 @@ def compare_contracts(
             errors.append(err or {"error": f"side_{idx+1} unresolved", "criteria": criteria})
             continue
         resolved_rows.append(contract)
-        resolved_meta.append({"side": f"side_{idx+1}", "criteria": criteria, "ContractID": contract.get("ContractID")})
+        resolved_meta.append(
+            {
+                "side": f"side_{idx+1}",
+                "criteria": criteria,
+                "ContractID": contract.get("ContractID"),
+            }
+        )
 
     if len(resolved_rows) < 2:
         return json.dumps(
@@ -518,6 +564,7 @@ def compare_contracts(
             default=str,
         )
 
+    # Always use N-way matrix (pairwise wrapper preserved for N=2 callers).
     if len(resolved_rows) == 2:
         result = compare_contract_rows(
             resolved_rows[0],
@@ -530,6 +577,7 @@ def compare_contracts(
 
     result["side_criteria"] = side_criteria
     result["resolved"] = resolved_meta
+    result["contract_count"] = len(resolved_rows)
     if errors:
         result["resolution_warnings"] = errors
     return json.dumps(result, default=str)

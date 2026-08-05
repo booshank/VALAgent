@@ -33,14 +33,15 @@ This is **not** an Azure AI Foundry-first runtime.
 
 ---
 
-## 3. Compare CON-0001 and CON-0002
+## 3. Compare CON-0001 and CON-0002 (or any IDs / N-way)
 
 | Item | Detail |
 | --- | --- |
-| **Expected tool** | `compare_contracts(contract_refs="CON-0001,CON-0002")` |
+| **Expected tool** | `compare_contracts(contract_refs="CON-0001,CON-0002")` — pass **all** IDs, not only the first two |
 | **Expected behavior** | Field-level compare + `## Recommendation` style decision notes when LLM path is used; offline router emits comparison tables / ranking notes. |
-| **Sample expected output** | Differences on vendor (AWS vs Microsoft), payment terms, contract value, OpCo/business unit. |
-| **Success looks like** | Clear side-by-side deltas and an explicit preference / risk call. |
+| **Also works** | Any pair (`CON-0005,CON-0088`), 3+ way (`CON-0005,CON-0010,CON-0020`), vendor lists (`AWS, Microsoft, Cisco`), and `Compare all Microsoft contracts` (expands via search). |
+| **Sample expected output** | Differences on vendor, payment terms, contract value, OpCo/business unit. |
+| **Success looks like** | Clear side-by-side / N-way matrix and an explicit preference / risk call. Never silently falls back to only CON-0001 vs CON-0002. |
 
 ---
 

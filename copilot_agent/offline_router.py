@@ -101,16 +101,34 @@ _CONTRACT_TYPE_RE = re.compile(
     re.I,
 )
 _SUPPLIER_RE = re.compile(
-    r"\b(AlphaTech(?:\s+Services)?|Microsoft|Amazon AWS|Amazon|Google Cloud|Google|"
-    r"Oracle|SAP|IBM|Salesforce|ServiceNow|Adobe|Cisco|VMware|Snowflake|Databricks|"
-    r"Accenture|Dell)\b",
+    r"\b("
+    r"AlphaTech(?:\s+Services)?|"
+    r"Accenture(?:\s+UK)?|"
+    r"Amazon(?:\s+AWS)?|AWS|"
+    r"Microsoft|"
+    r"Google(?:\s+Cloud)?|"
+    r"Oracle|SAP|IBM|Salesforce|ServiceNow|Adobe|Cisco|VMware|Snowflake|Databricks|Dell"
+    r")\b",
     re.I,
 )
 _CONTRACT_NAME_RE = re.compile(
     r"(?:contract\s*name|named)\s*[:=]?\s*[\"']?([A-Za-z0-9][A-Za-z0-9 ._/&-]{3,})[\"']?",
     re.I,
 )
-_COMPARE_SPLIT_RE = re.compile(r"\b(?:vs\.?|versus|and|with|against)\b", re.I)
+_COMPARE_SPLIT_RE = re.compile(
+    r"\s*(?:,|/|\||\bvs\.?\b|\bversus\b|\bagainst\b|\bwith\b|\band\b)\s*",
+    re.I,
+)
+_COMPARE_ALL_RE = re.compile(
+    r"\b(all|every|each)\b.{0,40}\bcontracts?\b|\bcontracts?\b.{0,20}\b(all|every)\b",
+    re.I,
+)
+_COMPARE_LIMIT_RE = re.compile(
+    r"\b(?:first|top|next)\s+(\d+)\b|"
+    r"\b(\d+)\s+(?:contracts?|agreements?)\b|"
+    r"\b(\d+)\s*[- ]\s*way\b",
+    re.I,
+)
 
 
 def _tool_map(tools: list[BaseTool]) -> dict[str, BaseTool]:
@@ -481,9 +499,12 @@ def _summarize_compare_payload(
         "| Total Value | "
         + " | ".join(_md_cell(row.get("ContractValue")) for row in contracts)
         + " |",
-        f"| Fields compared | {payload.get('fields_compared')} |",
-        f"| Matching fields | {payload.get('matching_field_count')} |",
-        f"| Differing fields | {payload.get('difference_count')} |",
+        "",
+        (
+            f"Fields compared: {payload.get('fields_compared')} · "
+            f"Matching: {payload.get('matching_field_count')} · "
+            f"Differing: {payload.get('difference_count')}"
+        ),
         "",
         "#### Field matrix (differences first)",
         "",
@@ -643,12 +664,154 @@ def _criteria_from_parts(
     return criteria
 
 
+def _split_compare_targets(text: str) -> list[str]:
+    """
+    Split a compare prompt into N target segments.
+
+    Examples:
+      "compare CON-0005 vs CON-0010 vs CON-0020"
+      "compare AWS, Microsoft, and Cisco"
+      "compare CON-0001, CON-0002 and CON-0003"
+    """
+    cleaned = re.sub(
+        r"^\s*(please\s+)?(compar\w*|diff(?:erence|s)?)\s+(of\s+|the\s+)?",
+        "",
+        text.strip(),
+        flags=re.I,
+    )
+    cleaned = re.sub(
+        r"^\s*(contracts?|agreements?|vendors?|suppliers?)\s+",
+        "",
+        cleaned,
+        flags=re.I,
+    )
+    parts = [part.strip(" .;:") for part in _COMPARE_SPLIT_RE.split(cleaned) if part and part.strip(" .;:")]
+    # Drop residual connector-only / compare-only tokens.
+    filtered = [
+        part
+        for part in parts
+        if part and not re.fullmatch(r"(compar\w*|contracts?|agreements?|vendors?|suppliers?)", part, re.I)
+    ]
+    return filtered
+
+
 def _split_compare_sides(text: str) -> tuple[str, str] | None:
-    parts = [part.strip() for part in _COMPARE_SPLIT_RE.split(text) if part.strip()]
-    # Prefer splits that look like "... compare X vs Y"
+    """Backward-compatible pairwise split (first/last of N targets)."""
+    parts = _split_compare_targets(text)
     if len(parts) >= 2:
-        return parts[-2], parts[-1]
+        return parts[0], parts[-1]
     return None
+
+
+def _requested_compare_limit(text: str, *, default: int = 5, absolute_max: int = 12) -> int:
+    match = _COMPARE_LIMIT_RE.search(text or "")
+    if match:
+        raw = next((g for g in match.groups() if g), None)
+        if raw:
+            try:
+                return max(2, min(int(raw), absolute_max))
+            except ValueError:
+                pass
+    if _COMPARE_ALL_RE.search(text or ""):
+        return absolute_max
+    return default
+
+
+def _normalize_supplier_token(name: str) -> str:
+    token = (name or "").strip()
+    lowered = token.lower()
+    if lowered in {"amazon", "amazon aws", "aws"}:
+        return "AWS"
+    if lowered in {"google cloud", "google"}:
+        return "Google Cloud" if "cloud" in lowered else "Google"
+    if lowered in {"alphatech", "alphatech services"}:
+        return "AlphaTech Services"
+    if lowered == "accenture uk":
+        return "Accenture UK"
+    return token
+
+
+def _build_compare_kwargs_from_text(
+    user_text: str,
+    *,
+    contract_ids: list[str],
+    suppliers: list[str],
+    contract_names: list[str],
+    contract_types: list[str],
+    annual_costs: list[float],
+) -> dict[str, Any]:
+    """Resolve compare tool kwargs for pairwise or N-way prompts."""
+    if len(contract_ids) >= 2:
+        return {"contract_refs": ",".join(contract_ids)}
+    if len(suppliers) >= 2:
+        return {"supplier_names": ",".join(_normalize_supplier_token(s) for s in suppliers)}
+    if len(contract_names) >= 2:
+        return {"contract_names": ",".join(contract_names)}
+    if len(contract_types) >= 2:
+        return {"contract_types": ",".join(contract_types)}
+    if len(annual_costs) >= 2:
+        return {"annual_costs": ",".join(str(v) for v in annual_costs)}
+
+    targets = _split_compare_targets(user_text)
+    if len(targets) >= 2:
+        refs: list[str] = []
+        names: list[str] = []
+        cnames: list[str] = []
+        ctypes: list[str] = []
+        costs: list[float] = []
+        for part in targets:
+            part_ids = _extract_contract_ids(part)
+            part_suppliers = [_normalize_supplier_token(s) for s in _extract_suppliers(part)]
+            part_names = _extract_contract_names(part)
+            part_types = _extract_contract_types(part)
+            part_costs = _extract_annual_costs(part)
+            if part_ids:
+                refs.extend(part_ids)
+            elif part_suppliers:
+                names.extend(part_suppliers)
+            elif part_names:
+                cnames.extend(part_names)
+            elif part_types:
+                ctypes.extend(part_types)
+            elif part_costs:
+                costs.extend(part_costs)
+            else:
+                # Bare token that looks like a contract id/number or supplier label.
+                token = part.strip().strip("\"'")
+                if _CONTRACT_ID_RE.fullmatch(token):
+                    refs.append(token)
+                elif token:
+                    # Prefer as contract name fragment when no supplier matched.
+                    cnames.append(token)
+        refs = list(dict.fromkeys(refs))
+        names = list(dict.fromkeys(names))
+        cnames = list(dict.fromkeys(cnames))
+        ctypes = list(dict.fromkeys(ctypes))
+        costs = list(dict.fromkeys(costs))
+        if len(refs) >= 2:
+            return {"contract_refs": ",".join(refs)}
+        if len(names) >= 2:
+            return {"supplier_names": ",".join(names)}
+        if len(cnames) >= 2:
+            return {"contract_names": ",".join(cnames)}
+        if len(ctypes) >= 2:
+            return {"contract_types": ",".join(ctypes)}
+        if len(costs) >= 2:
+            return {"annual_costs": ",".join(str(v) for v in costs)}
+
+    # Single-supplier / "all contracts" expansion is handled by the caller via MCP.
+    if len(suppliers) == 1:
+        return {
+            "supplier_names": _normalize_supplier_token(suppliers[0]),
+            "expand_matches": True,
+            "max_contracts": _requested_compare_limit(user_text),
+        }
+    if _COMPARE_ALL_RE.search(user_text):
+        return {
+            "expand_matches": True,
+            "max_contracts": _requested_compare_limit(user_text),
+        }
+    return {}
 
 
 def _lifecycle_red_flag_audit(missing_raw: str, search_raw: str | None = None) -> str:
@@ -1084,60 +1247,63 @@ async def run_offline_turn(user_text: str) -> str:
                 ):
                     sections.append(_lifecycle_financial_exposure(raw, None))
             elif name == "compare_contracts":
-                compare_kwargs: dict[str, Any] = {}
-                if len(contract_ids) >= 2:
-                    compare_kwargs["contract_refs"] = ",".join(contract_ids)
-                elif len(suppliers) >= 2:
-                    compare_kwargs["supplier_names"] = ",".join(suppliers)
-                elif len(contract_names) >= 2:
-                    compare_kwargs["contract_names"] = ",".join(contract_names)
-                elif len(contract_types) >= 2:
-                    compare_kwargs["contract_types"] = ",".join(contract_types)
-                elif len(annual_costs) >= 2:
-                    compare_kwargs["annual_costs"] = ",".join(str(v) for v in annual_costs)
-                else:
-                    sides = _split_compare_sides(user_text)
-                    if sides:
-                        # Fall back to pairwise extraction across split segments.
-                        left_suppliers = _extract_suppliers(sides[0])
-                        right_suppliers = _extract_suppliers(sides[1])
-                        left_ids = _extract_contract_ids(sides[0])
-                        right_ids = _extract_contract_ids(sides[1])
-                        left_names = _extract_contract_names(sides[0])
-                        right_names = _extract_contract_names(sides[1])
-                        left_types = _extract_contract_types(sides[0])
-                        right_types = _extract_contract_types(sides[1])
-                        left_costs = _extract_annual_costs(sides[0])
-                        right_costs = _extract_annual_costs(sides[1])
-                        if left_ids or right_ids:
-                            refs = [*left_ids, *right_ids]
-                            if len(refs) >= 2:
-                                compare_kwargs["contract_refs"] = ",".join(refs)
-                        elif left_suppliers or right_suppliers:
-                            names = [*left_suppliers, *right_suppliers]
-                            if len(names) >= 2:
-                                compare_kwargs["supplier_names"] = ",".join(names)
-                        elif left_names or right_names:
-                            cnames = [*left_names, *right_names]
-                            if len(cnames) >= 2:
-                                compare_kwargs["contract_names"] = ",".join(cnames)
-                        elif left_types or right_types:
-                            ctypes = [*left_types, *right_types]
-                            if len(ctypes) >= 2:
-                                compare_kwargs["contract_types"] = ",".join(ctypes)
-                        elif left_costs or right_costs:
-                            costs = [*left_costs, *right_costs]
-                            if len(costs) >= 2:
-                                compare_kwargs["annual_costs"] = ",".join(str(v) for v in costs)
+                compare_kwargs = _build_compare_kwargs_from_text(
+                    user_text,
+                    contract_ids=contract_ids,
+                    suppliers=suppliers,
+                    contract_names=contract_names,
+                    contract_types=contract_types,
+                    annual_costs=annual_costs,
+                )
+                expand_matches = bool(compare_kwargs.pop("expand_matches", False))
+                max_contracts = int(compare_kwargs.pop("max_contracts", 5) or 5)
+                if expand_matches:
+                    # Expand one vendor (or whole catalog slice) into an N-way ID list.
+                    search_tool = tools.get("search_contracts")
+                    vendor = None
+                    if compare_kwargs.get("supplier_names"):
+                        vendor = str(compare_kwargs["supplier_names"]).split(",")[0].strip()
+                    if search_tool is None:
+                        sections.append(
+                            "N-way vendor expansion requires `search_contracts`, which is unavailable."
+                        )
+                        continue
+                    search_raw = await _ainvoke_tool(
+                        search_tool,
+                        vendor=vendor,
+                        max_rows=max(max_contracts, 25),
+                    )
+                    try:
+                        search_payload = json.loads(search_raw)
+                    except json.JSONDecodeError:
+                        search_payload = {}
+                    expanded_ids = [
+                        str(row.get("contract_id"))
+                        for row in (search_payload.get("rows") or [])
+                        if row.get("contract_id")
+                    ][:max_contracts]
+                    if len(expanded_ids) >= 2:
+                        compare_kwargs = {"contract_refs": ",".join(expanded_ids)}
+                        sections.append(
+                            f"Expanded compare set to {len(expanded_ids)} contracts"
+                            + (f" for {vendor}" if vendor else "")
+                            + f": {', '.join(expanded_ids)}."
+                        )
+                    else:
+                        sections.append(
+                            "Could not expand enough contracts for comparison"
+                            + (f" under vendor `{vendor}`." if vendor else ".")
+                        )
+                        continue
 
                 if not compare_kwargs:
-                    compare_kwargs = {
-                        "contract_refs": "CON-0001,CON-0002",
-                    }
                     sections.append(
-                        "No two resolvable compare sides detected; "
-                        "defaulting comparison to CON-0001 vs CON-0002."
+                        "Contract comparison needs at least two contract IDs, "
+                        "vendors, or names (for example: "
+                        "`Compare CON-0005 vs CON-0010 vs CON-0020` or "
+                        "`Compare all Microsoft contracts`)."
                     )
+                    continue
                 raw = await _ainvoke_tool(tool, **compare_kwargs)
 
                 # Enrich compare with spend + clause search (orchestrator layer only).

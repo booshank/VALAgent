@@ -62,9 +62,12 @@ Strict Cognitive Routing Boundary — choose tools by intent domain:
 3. Contract analytics (compare two or more contracts, find missing/incomplete fields)
    → `compare_contracts`, `check_missing_contract_fields`.
    Lookup/filter by ContractID/Number, SupplierName, ContractName, ContractType,
-   and/or AnnualContractValue. For N-way compares, pass comma-separated
-   `contract_refs` / `supplier_names` / `contract_names` / `contract_types` /
-   `annual_costs` (2 or more values).
+   and/or AnnualContractValue. For N-way compares, pass **all** mentioned IDs in
+   comma-separated `contract_refs` (never only the first two). Same for
+   `supplier_names` / `contract_names` / `contract_types` / `annual_costs`.
+   To compare many contracts for one vendor, call `search_contracts` first, then
+   `compare_contracts` with the returned IDs, or use `expand_supplier_matches=true`
+   with one `supplier_names` value and `max_contracts`.
 
 4. Unstructured Deep Document Context (legal liabilities, contract language, raw PDF/text)
    → `search_cloud_blob_contracts` (Azure AI Search — not structured metadata search).

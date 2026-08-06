@@ -519,6 +519,10 @@ def compare_contracts(
 
     Returns:
         JSON string with N-way field matrix (and pairwise compatibility fields when N=2).
+        If any requested supplier/contract ID cannot be resolved, returns a hard-stop
+        payload with error=contract_not_present and message:
+        "The contract information requested for the comparison is not available at the moment"
+        (no partial compare, no default CON-0001/CON-0002 fallback).
     """
     rows = _load_vendor_contracts(max_rows=500)
     side_criteria = _build_side_criteria_list(

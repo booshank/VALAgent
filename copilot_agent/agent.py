@@ -28,7 +28,6 @@ from langchain_openai import AzureChatOpenAI
 from config import get, require
 from mcp_clients import bridge
 from offline_router import (
-    COMPARE_CONTRACTS_UNAVAILABLE,
     _COMPARE_RE,
     run_offline_turn,
     sanitize_default_compare_hallucination,

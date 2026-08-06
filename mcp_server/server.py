@@ -157,6 +157,39 @@ def _rows_payload(rows: list[dict[str, Any]], *, criteria: dict[str, Any] | None
     }
 
 
+CONTRACT_INFO_NOT_PRESENT = "Contract information is not present."
+
+
+def _missing_contract_label(criteria: dict[str, Any] | None) -> str | None:
+    criteria = criteria or {}
+    for key in ("contract_ref", "supplier_name", "contract_name", "contract_type"):
+        value = criteria.get(key)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    if criteria.get("annual_cost") is not None:
+        return str(criteria.get("annual_cost"))
+    return None
+
+
+def _contract_not_present_payload(
+    *,
+    missing: list[str] | None = None,
+    side_criteria: list[dict[str, Any]] | None = None,
+    errors: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    labels = [str(item).strip() for item in (missing or []) if str(item).strip()]
+    message = CONTRACT_INFO_NOT_PRESENT
+    if labels:
+        message = f"Contract information is not present for {', '.join(labels)}."
+    return {
+        "error": "contract_not_present",
+        "message": message,
+        "missing": labels,
+        "side_criteria": side_criteria or [],
+        "errors": errors or [],
+    }
+
+
 def _resolve_or_error(
     rows: list[dict[str, Any]],
     criteria: dict[str, Any],
@@ -167,8 +200,10 @@ def _resolve_or_error(
     contract = resolved.get("contract")
     if contract is not None:
         return contract, None
+    label = _missing_contract_label(criteria) or side_label
     return None, {
-        "error": f"Could not uniquely resolve {side_label} contract from criteria",
+        "error": "contract_not_present",
+        "message": f"Contract information is not present for {label}.",
         "side": side_label,
         "criteria": criteria,
         "match_count": resolved.get("match_count", 0),
@@ -504,14 +539,14 @@ def compare_contracts(
         and "supplier_name" in side_criteria[0]
         and len(side_criteria[0]) == 1
     ):
+        supplier = str(side_criteria[0].get("supplier_name") or "").strip()
         matches = filter_contracts(rows, side_criteria[0])[:limit]
         if len(matches) < 2:
             return json.dumps(
-                {
-                    "error": "Need at least two contracts for the supplier to compare",
-                    "side_criteria": side_criteria,
-                    "match_count": len(matches),
-                },
+                _contract_not_present_payload(
+                    missing=[supplier] if supplier else None,
+                    side_criteria=side_criteria,
+                ),
                 default=str,
             )
         result = compare_many_contract_rows(matches)
@@ -522,14 +557,7 @@ def compare_contracts(
 
     if len(side_criteria) < 2:
         return json.dumps(
-            {
-                "error": "Provide at least two contract lookup sides for comparison",
-                "side_criteria": side_criteria,
-                "hint": (
-                    "Pass comma-separated contract_refs for any IDs (not only the first two), "
-                    "or set expand_supplier_matches=true with one supplier_names value."
-                ),
-            },
+            _contract_not_present_payload(side_criteria=side_criteria),
             default=str,
         )
 
@@ -540,10 +568,13 @@ def compare_contracts(
     resolved_rows: list[dict[str, Any]] = []
     resolved_meta: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
+    missing_labels: list[str] = []
     for idx, criteria in enumerate(side_criteria):
         contract, err = _resolve_or_error(rows, criteria, side_label=f"side_{idx+1}")
         if err or contract is None:
             errors.append(err or {"error": f"side_{idx+1} unresolved", "criteria": criteria})
+            label = _missing_contract_label(criteria) or f"side_{idx+1}"
+            missing_labels.append(label)
             continue
         resolved_rows.append(contract)
         resolved_meta.append(
@@ -554,13 +585,24 @@ def compare_contracts(
             }
         )
 
+    # If any requested side is missing, do not compare the remainder.
+    if errors or len(resolved_rows) < len(side_criteria):
+        return json.dumps(
+            _contract_not_present_payload(
+                missing=missing_labels,
+                side_criteria=side_criteria,
+                errors=errors,
+            ),
+            default=str,
+        )
+
     if len(resolved_rows) < 2:
         return json.dumps(
-            {
-                "error": "Could not resolve at least two contracts for comparison",
-                "resolved": resolved_meta,
-                "errors": errors,
-            },
+            _contract_not_present_payload(
+                missing=missing_labels,
+                side_criteria=side_criteria,
+                errors=errors,
+            ),
             default=str,
         )
 
@@ -578,8 +620,6 @@ def compare_contracts(
     result["side_criteria"] = side_criteria
     result["resolved"] = resolved_meta
     result["contract_count"] = len(resolved_rows)
-    if errors:
-        result["resolution_warnings"] = errors
     return json.dumps(result, default=str)
 
 

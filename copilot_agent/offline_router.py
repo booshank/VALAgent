@@ -22,6 +22,13 @@ INVOICE_OOS_MESSAGE = (
     "This requires a separate data-linkage POC."
 )
 
+# Legacy offline-router hallucination / stale-runtime message. Never surface this.
+_DEFAULT_COMPARE_HALLUCINATION_RE = re.compile(
+    r"No two resolvable compare sides detected;\s*"
+    r"defaulting comparison to CON-0001 vs CON-0002\.?",
+    re.I,
+)
+
 # Hard out-of-scope guard for invoice / actual-payment systems (before tool selection).
 # SAP/Oracle alone are valid vendor names; only refuse when paired with invoice/payment/ERP cues.
 _INVOICE_OOS_RE = re.compile(
@@ -771,7 +778,8 @@ def _build_compare_kwargs_from_text(
         return {"annual_costs": ",".join(str(v) for v in annual_costs)}
 
     targets = _split_compare_targets(user_text)
-    if len(targets) >= 2:
+    multi_side = len(targets) >= 2
+    if multi_side:
         refs: list[str] = []
         names: list[str] = []
         cnames: list[str] = []
@@ -794,13 +802,19 @@ def _build_compare_kwargs_from_text(
             elif part_costs:
                 costs.extend(part_costs)
             else:
-                # Bare token that looks like a contract id/number or supplier label.
+                # Bare token: contract id, else treat as supplier label for compare sides.
+                # (Unknown vendors must not collapse into single-supplier catalog expansion.)
                 token = part.strip().strip("\"'")
+                token = re.sub(
+                    r"^(contracts?|agreements?|vendors?|suppliers?)\s+",
+                    "",
+                    token,
+                    flags=re.I,
+                ).strip()
                 if _CONTRACT_ID_RE.fullmatch(token):
                     refs.append(token)
                 elif token:
-                    # Prefer as contract name fragment when no supplier matched.
-                    cnames.append(token)
+                    names.append(_normalize_supplier_token(token))
         refs = list(dict.fromkeys(refs))
         names = list(dict.fromkeys(names))
         cnames = list(dict.fromkeys(cnames))
@@ -810,21 +824,37 @@ def _build_compare_kwargs_from_text(
             return {"contract_refs": ",".join(refs)}
         if len(names) >= 2:
             return {"supplier_names": ",".join(names)}
+        # Mixed known supplier + unknown vendor → keep both as supplier sides.
+        if len(names) >= 1 and len(cnames) >= 1:
+            mixed = list(dict.fromkeys([*names, *cnames]))
+            if len(mixed) >= 2:
+                return {"supplier_names": ",".join(mixed)}
         if len(cnames) >= 2:
             return {"contract_names": ",".join(cnames)}
         if len(ctypes) >= 2:
             return {"contract_types": ",".join(ctypes)}
         if len(costs) >= 2:
             return {"annual_costs": ",".join(str(v) for v in costs)}
+        # Explicit multi-side compare that we could not fully classify: do not
+        # fall through to single-supplier / catalog expansion (that produced
+        # the old CON-0001 vs CON-0002 defaulting behavior).
+        if names:
+            return {"supplier_names": ",".join(names)}
+        if cnames:
+            return {"contract_names": ",".join(cnames)}
+        if refs:
+            return {"contract_refs": ",".join(refs)}
+        return {}
 
     # Single-supplier / "all contracts" expansion is handled by the caller via MCP.
-    if len(suppliers) == 1:
+    # Only when the user did not name two distinct compare sides.
+    if len(suppliers) == 1 and not multi_side:
         return {
             "supplier_names": _normalize_supplier_token(suppliers[0]),
             "expand_matches": True,
             "max_contracts": _requested_compare_limit(user_text),
         }
-    if _COMPARE_ALL_RE.search(user_text):
+    if _COMPARE_ALL_RE.search(user_text) and not multi_side:
         return {
             "expand_matches": True,
             "max_contracts": _requested_compare_limit(user_text),
@@ -1101,6 +1131,31 @@ def _no_such_contract_text(labels: list[Any] | None = None) -> str:
     if cleaned:
         return f"No such contract is available for {', '.join(cleaned)}."
     return "No such contract is available."
+
+
+def sanitize_default_compare_hallucination(
+    text: str,
+    *,
+    user_text: str = "",
+) -> str:
+    """
+    Strip the legacy CON-0001 vs CON-0002 defaulting message if an LLM or stale
+    runtime still emits it. Prefer labeled missing-contract copy when possible.
+    """
+    raw = str(text or "")
+    if not _DEFAULT_COMPARE_HALLUCINATION_RE.search(raw):
+        return raw
+    labels: list[str] = []
+    labels.extend(_extract_contract_ids(user_text))
+    labels.extend(_normalize_supplier_token(s) for s in _extract_suppliers(user_text))
+    # Also keep unknown multi-side tokens from the compare prompt.
+    for part in _split_compare_targets(user_text):
+        token = part.strip().strip("\"'")
+        if token and token not in labels and not _CONTRACT_ID_RE.fullmatch(token):
+            if not _extract_suppliers(token):
+                labels.append(_normalize_supplier_token(token))
+    labels = list(dict.fromkeys(label for label in labels if label))
+    return _no_such_contract_text(labels)
 
 
 def _summarize_search_contracts(raw: str, *, limit: int = 10) -> str:
@@ -1658,5 +1713,9 @@ async def run_offline_turn(
         "no such contract is available" in sections[0].lower()
         or "contract information is not present" in sections[0].lower()
     ):
-        return sections[0].strip()
-    return header + "\n\n" + "\n\n".join(sections)
+        return sanitize_default_compare_hallucination(
+            sections[0].strip(),
+            user_text=user_text,
+        )
+    reply = header + "\n\n" + "\n\n".join(sections)
+    return sanitize_default_compare_hallucination(reply, user_text=user_text)

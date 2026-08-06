@@ -27,7 +27,11 @@ from langchain_openai import AzureChatOpenAI
 
 from config import get, require
 from mcp_clients import bridge
-from offline_router import run_offline_turn
+from offline_router import (
+    _COMPARE_RE,
+    run_offline_turn,
+    sanitize_default_compare_hallucination,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -251,17 +255,26 @@ async def run_turn(
     conversation_id: str | None = None,
 ) -> str:
     """Execute one cognitive turn; returns the final assistant text."""
-    if _force_offline_llm():
-        logger.warning(
-            "Using offline cognitive router "
-            "(USE_OFFLINE_MOCKS / AZURE_OPENAI_FORCE_OFFLINE enabled)"
-        )
-        return await run_offline_turn(
+    # Compare intents use the deterministic offline router so missing vendors /
+    # contracts never fall through to an LLM-invented CON-0001 vs CON-0002 default.
+    force_offline = _force_offline_llm() or bool(_COMPARE_RE.search(user_text or ""))
+    if force_offline:
+        if _force_offline_llm():
+            logger.warning(
+                "Using offline cognitive router "
+                "(USE_OFFLINE_MOCKS / AZURE_OPENAI_FORCE_OFFLINE enabled)"
+            )
+        else:
+            logger.info(
+                "Using offline cognitive router for deterministic compare intent"
+            )
+        reply = await run_offline_turn(
             user_text,
             chat_history=chat_history,
             persona_id=persona_id,
             conversation_id=conversation_id,
         )
+        return sanitize_default_compare_hallucination(reply, user_text=user_text)
 
     try:
         executor = await get_agent_executor()
@@ -278,15 +291,18 @@ async def run_turn(
                 "falling back to offline cognitive router",
                 exc,
             )
-            return await run_offline_turn(
+            reply = await run_offline_turn(
                 user_text,
                 chat_history=chat_history,
                 persona_id=persona_id,
                 conversation_id=conversation_id,
             )
+            return sanitize_default_compare_hallucination(reply, user_text=user_text)
         raise
 
     output = result.get("output", "")
     if isinstance(output, AIMessage):
-        return str(output.content)
-    return str(output)
+        text = str(output.content)
+    else:
+        text = str(output)
+    return sanitize_default_compare_hallucination(text, user_text=user_text)

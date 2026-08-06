@@ -233,6 +233,18 @@ def test_offline_router_missing_contract_no_default_compare() -> None:
     assert "IBM" in search_reply
     print("missing vendor search OK", search_reply.strip())
 
+    async def _run_mixed() -> str:
+        return await run_offline_turn("Compare Microsoft and AcmeCorp")
+
+    mixed_reply = asyncio.run(_run_mixed())
+    assert "No such contract is available" in mixed_reply
+    assert "defaulting" not in mixed_reply.lower()
+    assert "CON-0001 vs CON-0002" not in mixed_reply
+    assert "Field matrix" not in mixed_reply
+    assert "2-way" not in mixed_reply
+    print("mixed known/unknown supplier compare OK", mixed_reply.strip())
+
+
 def test_offline_router_compare_routing() -> None:
     from offline_router import (
         _build_compare_kwargs_from_text,
@@ -278,7 +290,53 @@ def test_offline_router_compare_routing() -> None:
     )
     assert kwargs3.get("expand_matches") is True
     assert "CON-0001,CON-0002" not in str(kwargs3)
-    print("offline compare routing OK", kwargs, kwargs2, kwargs3)
+
+    # Known vendor + unknown vendor must NOT collapse into Microsoft expansion
+    # (that previously produced an implicit CON-0001 vs CON-0002 style compare).
+    q4 = "Compare Microsoft and AcmeCorp"
+    kwargs4 = _build_compare_kwargs_from_text(
+        q4,
+        contract_ids=[],
+        suppliers=_extract_suppliers(q4),
+        contract_names=[],
+        contract_types=[],
+        annual_costs=[],
+    )
+    assert kwargs4.get("expand_matches") in (None, False)
+    names4 = [n.strip() for n in str(kwargs4.get("supplier_names") or "").split(",") if n.strip()]
+    assert "Microsoft" in names4
+    assert any(n.lower() == "acmecorp" for n in names4), kwargs4
+
+    q5 = "Compare FooVendor and BarVendor contracts"
+    kwargs5 = _build_compare_kwargs_from_text(
+        q5,
+        contract_ids=[],
+        suppliers=_extract_suppliers(q5),
+        contract_names=[],
+        contract_types=[],
+        annual_costs=[],
+    )
+    assert kwargs5.get("expand_matches") in (None, False)
+    names5 = [n.strip() for n in str(kwargs5.get("supplier_names") or "").split(",") if n.strip()]
+    assert len(names5) >= 2, kwargs5
+    print("offline compare routing OK", kwargs, kwargs2, kwargs3, kwargs4, kwargs5)
+
+
+def test_sanitize_default_compare_hallucination() -> None:
+    from offline_router import sanitize_default_compare_hallucination
+
+    legacy = (
+        "No two resolvable compare sides detected; "
+        "defaulting comparison to CON-0001 vs CON-0002."
+    )
+    cleaned = sanitize_default_compare_hallucination(
+        legacy,
+        user_text="Compare IBM and Salesforce",
+    )
+    assert "defaulting" not in cleaned.lower()
+    assert "No such contract is available" in cleaned
+    assert "IBM" in cleaned and "Salesforce" in cleaned
+    print("sanitize default compare OK", cleaned)
 
 
 def test_oracle_vendor_not_blocked() -> None:
@@ -402,6 +460,7 @@ if __name__ == "__main__":
     test_compare_contracts_any_ids_and_nway()
     test_offline_router_missing_contract_no_default_compare()
     test_offline_router_compare_routing()
+    test_sanitize_default_compare_hallucination()
     test_oracle_vendor_not_blocked()
     test_persona_memory_recall_routing()
     test_find_overlaps_tool_and_routing()

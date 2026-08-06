@@ -131,14 +131,72 @@ def memory_searches() -> Any:
     """List prior searches for a persona (Validation UI / tooling helper)."""
     persona_id = (request.args.get("persona_id") or "default-user").strip()
     limit = int(request.args.get("limit") or 25)
+    query = (request.args.get("q") or request.args.get("query") or "").strip() or None
+    saved_only = (request.args.get("saved_only") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
     store = get_memory_store()
     store.ensure_persona(persona_id)
     return jsonify(
         {
             "persona_id": persona_id,
-            "searches": store.list_searches(persona_id, limit=limit),
+            "query": query,
+            "searches": store.list_searches(
+                persona_id,
+                limit=limit,
+                query=query,
+                saved_only=saved_only,
+            ),
         }
     )
+
+
+@app.post("/api/memory/searches")
+def memory_save_search() -> Any:
+    """Explicitly save a search query for later retrieval."""
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict):
+        return jsonify({"error": "Invalid JSON payload"}), 400
+    persona_id = str(body.get("persona_id") or "default-user").strip()
+    query = str(body.get("query") or "").strip()
+    if not query:
+        return jsonify({"error": "query is required"}), 400
+    conversation_id = body.get("conversation_id")
+    result_preview = body.get("result_preview")
+    store = get_memory_store()
+    saved = store.save_search(
+        persona_id,
+        query,
+        conversation_id=str(conversation_id) if conversation_id else None,
+        result_preview=str(result_preview) if result_preview else None,
+        mark_saved=True,
+    )
+    return jsonify({"persona_id": persona_id, "search": saved}), 201
+
+
+@app.delete("/api/memory/searches/<int:search_id>")
+def memory_delete_search(search_id: int) -> Any:
+    """Delete one saved/auto-captured search for a persona."""
+    persona_id = (request.args.get("persona_id") or "").strip() or None
+    store = get_memory_store()
+    deleted = store.delete_search(search_id, persona_id=persona_id)
+    if not deleted:
+        return jsonify({"error": "search not found", "id": search_id}), 404
+    return jsonify({"deleted": True, "id": search_id}), 200
+
+
+@app.get("/api/memory/recall")
+def memory_recall() -> Any:
+    """Retrieve prior searches (and conversations) for a persona, optionally filtered."""
+    persona_id = (request.args.get("persona_id") or "default-user").strip()
+    query = (request.args.get("q") or request.args.get("query") or "").strip() or None
+    limit = int(request.args.get("limit") or 8)
+    store = get_memory_store()
+    store.ensure_persona(persona_id)
+    return jsonify(store.recall(persona_id, query=query, limit=limit))
 
 
 @app.get("/api/memory/conversations")
@@ -179,6 +237,11 @@ def messages() -> Any:
 
     conversation_id = _conversation_id(activity)
     persona_id, persona_name = _persona_from_activity(activity)
+    channel_data = activity.get("channelData") or {}
+    client_persists = False
+    if isinstance(channel_data, dict):
+        client_persists = bool(channel_data.get("clientPersistsMemory"))
+
     store = get_memory_store()
     store.ensure_persona(persona_id, persona_name)
     store.ensure_conversation(conversation_id, persona_id)
@@ -197,6 +260,23 @@ def messages() -> Any:
         if str(chat_history[-1].content).strip() == user_text:
             chat_history = chat_history[:-1]
 
+    # Persist for non-UI clients; Streamlit sets clientPersistsMemory=true.
+    if not client_persists:
+        msgs = store.get_messages(conversation_id)
+        last = msgs[-1] if msgs else None
+        already_user = (
+            last is not None
+            and str(last.get("role")) == "user"
+            and str(last.get("content") or "").strip() == user_text
+        )
+        if not already_user:
+            store.append_message(
+                conversation_id,
+                "user",
+                user_text,
+                persona_id=persona_id,
+            )
+
     try:
         answer = _submit(
             run_turn(
@@ -210,9 +290,15 @@ def messages() -> Any:
         logger.exception("Agent turn failed")
         answer = f"Sorry — I hit an error while processing that: {exc}"
 
-    # Persistence of turns is owned by the Validation UI (and any direct API
-    # clients that write to the shared memory store). The agent reads history
-    # only, to avoid duplicate user/assistant rows on the Streamlit path.
+    if not client_persists:
+        store.append_message(
+            conversation_id,
+            "assistant",
+            str(answer),
+            persona_id=persona_id,
+            record_search=False,
+        )
+        store.update_latest_search_preview(persona_id, conversation_id, str(answer))
 
     reply = _build_reply(activity, answer)
     return jsonify(reply), 200

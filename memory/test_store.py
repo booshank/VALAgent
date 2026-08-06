@@ -59,8 +59,43 @@ class PersonaMemoryStoreTests(unittest.TestCase):
         self.assertEqual(history[0]["role"], "user")
         self.assertEqual(history[1]["role"], "assistant")
 
+    def test_explicit_save_filter_and_delete(self) -> None:
+        self.store.ensure_persona("analyst-2", "Analyst Two")
+        conv = self.store.ensure_conversation(None, "analyst-2")
+        # Older auto search that should still match a topic filter.
+        for idx in range(12):
+            self.store.save_search(
+                "analyst-2",
+                f"Show contracts for Vendor-{idx}",
+                conversation_id=conv["id"],
+                mark_saved=False,
+            )
+        pinned = self.store.save_search(
+            "analyst-2",
+            "Compare IBM and Salesforce",
+            conversation_id=conv["id"],
+            result_preview="unavailable",
+            mark_saved=True,
+        )
+        self.assertTrue(pinned.get("saved"))
+
+        filtered = self.store.list_searches("analyst-2", query="Vendor-0", limit=5)
+        self.assertEqual(len(filtered), 1)
+        self.assertIn("Vendor-0", filtered[0]["query"])
+
+        pinned_only = self.store.list_searches("analyst-2", saved_only=True)
+        self.assertEqual(len(pinned_only), 1)
+        self.assertEqual(pinned_only[0]["id"], pinned["id"])
+
+        recalled = self.store.recall("analyst-2", query="IBM", limit=5)
+        self.assertEqual(len(recalled["searches"]), 1)
+
+        self.assertTrue(self.store.delete_search(int(pinned["id"]), persona_id="analyst-2"))
+        self.assertEqual(self.store.list_searches("analyst-2", saved_only=True), [])
+
     def test_is_search_like(self) -> None:
         self.assertTrue(is_search_like("Compare CON-0001 and CON-0002"))
+        self.assertTrue(is_search_like("Retrieve my searches"))
         self.assertFalse(is_search_like("Thanks!"))
 
 

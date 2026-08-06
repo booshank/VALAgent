@@ -113,9 +113,16 @@ Until that allowlist is updated, local chat uses the offline router automaticall
 Streamlit and the Cognitive Routing Agent share a SQLite persona store at
 `data/persona_memory.sqlite` (override with `VAL_MEMORY_DB`).
 
-- Sidebar: choose persona, browse previous conversations, re-run prior searches
-- Ask the agent: “Show my previous searches” / “Recall old conversations”
-- Helper APIs: `GET /api/memory/searches?persona_id=…`, `GET /api/memory/conversations?persona_id=…`
+- **Auto-save**: search-like chat queries are stored per persona
+- **Sidebar**: filter / pin (**Save last search**) / **Re-run** / **Open chat** / **Delete**
+- **Retrieve in chat**: “Show my previous searches”, “Retrieve my saved searches”,
+  “previous searches about Microsoft”
+- **APIs**:
+  - `GET /api/memory/searches?persona_id=…&q=…&saved_only=true`
+  - `POST /api/memory/searches` `{persona_id, query, conversation_id?, result_preview?}`
+  - `DELETE /api/memory/searches/<id>?persona_id=…`
+  - `GET /api/memory/recall?persona_id=…&q=…`
+  - `GET /api/memory/conversations?persona_id=…`
 
 ## Testing the Validation UI
 

@@ -152,9 +152,11 @@ _COMPARE_LIMIT_RE = re.compile(
 _MEMORY_RECALL_RE = re.compile(
     r"\b("
     r"previous\s+search(?:es)?|prior\s+search(?:es)?|last\s+search|"
+    r"saved\s+search(?:es)?|retrieve\s+(?:my\s+)?search(?:es)?|"
     r"old\s+conversation(?:s)?|previous\s+conversation(?:s)?|"
     r"what\s+did\s+i\s+(?:ask|search)|recall|remember|"
-    r"search\s+history|conversation\s+history|persona\s+memory"
+    r"search\s+history|conversation\s+history|persona\s+memory|"
+    r"show\s+my\s+(?:previous|prior|saved|old)\s+search(?:es)?"
     r")\b",
     re.I,
 )
@@ -1374,13 +1376,18 @@ def _summarize_persona_memory(
     if searches:
         lines.append("#### Previous searches")
         for idx, row in enumerate(searches, start=1):
+            pinned = "📌 " if row.get("saved") else ""
             preview = str(row.get("result_preview") or "").strip()
             lines.append(
-                f"{idx}. {row.get('query')}"
+                f"{idx}. {pinned}{row.get('query')}"
                 + (f" — {preview[:120]}" if preview else "")
                 + f" ({row.get('created_at')})"
             )
         lines.append("")
+        lines.append(
+            "Tip: re-run any query from the Streamlit Saved searches sidebar, "
+            "or ask again with a topic filter (e.g. previous searches about Microsoft)."
+        )
     if conversations:
         lines.append("#### Previous conversations")
         for idx, row in enumerate(conversations, start=1):

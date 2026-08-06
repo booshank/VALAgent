@@ -60,6 +60,8 @@ def _build_activity(
         "channelData": {
             "personaId": persona_id,
             "personaName": persona_name,
+            # Streamlit owns SQLite writes; Flask should not double-persist.
+            "clientPersistsMemory": True,
         },
     }
 
@@ -217,18 +219,82 @@ def _render_sidebar(messages_url: str) -> str:
             st.rerun()
 
     st.divider()
-    st.subheader("Previous searches")
-    searches = store.list_searches(st.session_state.persona_id, limit=25)
+    st.subheader("Saved searches")
+    st.caption(
+        "Contract queries are auto-saved. Use **Save last search** to pin one, "
+        "or ask in chat: “Show my previous searches”."
+    )
+    search_filter = st.text_input(
+        "Filter saved searches",
+        value="",
+        placeholder="e.g. Microsoft, overlap, CON-0002",
+        key="search_filter",
+    )
+    saved_only = st.checkbox("Pinned only", value=False, key="saved_only")
+
+    last_user = next(
+        (
+            str(item.get("content") or "")
+            for item in reversed(st.session_state.messages)
+            if item.get("role") == "user"
+        ),
+        "",
+    )
+    last_assistant = next(
+        (
+            str(item.get("content") or "")
+            for item in reversed(st.session_state.messages)
+            if item.get("role") == "assistant"
+        ),
+        "",
+    )
+    save_cols = st.columns(2)
+    if save_cols[0].button(
+        "Save last search",
+        use_container_width=True,
+        disabled=not last_user.strip(),
+        help="Pin the latest user query so it stays easy to retrieve.",
+    ):
+        saved = store.save_search(
+            st.session_state.persona_id,
+            last_user,
+            conversation_id=st.session_state.conversation_id,
+            result_preview=last_assistant or None,
+            mark_saved=True,
+        )
+        st.success(f"Saved search #{saved['id']}")
+        st.rerun()
+    if save_cols[1].button(
+        "Retrieve in chat",
+        use_container_width=True,
+        help="Ask the agent to list previous searches for this persona.",
+    ):
+        topic = (search_filter or "").strip()
+        st.session_state.pending_prompt = (
+            f"Show my previous searches about {topic}"
+            if topic
+            else "Show my previous searches"
+        )
+        st.rerun()
+
+    searches = store.list_searches(
+        st.session_state.persona_id,
+        limit=40,
+        query=search_filter or None,
+        saved_only=saved_only,
+    )
     if not searches:
-        st.caption("No prior searches stored yet.")
+        st.caption("No saved searches yet — run a contract query first.")
     for item in searches:
         query = str(item.get("query") or "").strip()
         preview = str(item.get("result_preview") or "").strip()
-        with st.expander(query[:72] or "(empty search)", expanded=False):
+        pinned = bool(item.get("saved"))
+        label = ("📌 " if pinned else "") + (query[:72] or "(empty search)")
+        with st.expander(label, expanded=False):
             if preview:
                 st.caption(preview)
             st.caption(f"Saved: {item.get('created_at')}")
-            b1, b2 = st.columns(2)
+            b1, b2, b3 = st.columns(3)
             if b1.button("Re-run", key=f"rerun-{item['id']}", use_container_width=True):
                 st.session_state.pending_prompt = query
                 st.rerun()
@@ -241,6 +307,16 @@ def _render_sidebar(messages_url: str) -> str:
                 if item.get("conversation_id"):
                     _switch_conversation(str(item["conversation_id"]))
                     st.rerun()
+            if b3.button(
+                "Delete",
+                key=f"del-{item['id']}",
+                use_container_width=True,
+            ):
+                store.delete_search(
+                    int(item["id"]),
+                    persona_id=st.session_state.persona_id,
+                )
+                st.rerun()
 
     st.divider()
     st.markdown(

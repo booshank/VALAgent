@@ -28,6 +28,7 @@ from langchain_openai import AzureChatOpenAI
 from config import get, require
 from mcp_clients import bridge
 from offline_router import (
+    COMPARE_CONTRACTS_UNAVAILABLE,
     _COMPARE_RE,
     run_offline_turn,
     sanitize_default_compare_hallucination,
@@ -72,10 +73,10 @@ Strict Cognitive Routing Boundary — choose tools by intent domain:
    To compare many contracts for one vendor, call `search_contracts` first, then
    `compare_contracts` with the returned IDs, or use `expand_supplier_matches=true`
    with one `supplier_names` value and `max_contracts`.
-   If any requested contract or supplier has no match, return only
-   “No such contract is available” (include the missing label when known).
-   Never invent substitutes, never fall back to other contracts, and never
-   default to CON-0001 vs CON-0002 or any other hardcoded pair.
+   If any requested contract or supplier has no match, HARD STOP immediately.
+   Reply with exactly this message and nothing else (no table, no recommendation,
+   no default CON-0001/CON-0002 compare, no invented substitutes):
+   “The contract information requested for the comparison is not available at the moment”
 
 4. Unstructured Deep Document Context (legal liabilities, contract language, raw PDF/text)
    → `search_cloud_blob_contracts` (Azure AI Search — not structured metadata search).
@@ -89,19 +90,24 @@ Rules:
 - Never invent financial figures or legal clauses; always ground answers in tool results.
 - Prefer the narrowest tool that satisfies the user intent.
 - Prefer `search_contracts` / `get_contract_profile` over document search for metadata questions.
-- When a tool returns `error: contract_not_present` or “No such contract is available”,
-  relay that message verbatim and stop — do not compare defaults or invent IDs.
+- When a tool returns `error: contract_not_present` or the comparison-unavailable message,
+  relay that exact message verbatim and STOP — do not emit tables, recommendations,
+  default compares, or invented IDs.
 - When multiple domains apply, call each relevant tool and synthesize a single answer.
 - Keep responses concise and cite which data source backed each claim.
 - Do not modify, bypass, or replace data-retrieval tools; advanced lifecycle analysis happens
   only in your cognitive reasoning cycle after tools return evidence.
 
-Comparative Analysis & Decision Framework (MANDATORY for compare intents):
-When the user asks to compare vendor contracts, agreements, or spending records
-(including 3+ contracts), do NOT merely list extracted text chunks or place
-markdown tables side-by-side. Act as a strategic advisor and decide which option
-is better / lower risk using objective operational criteria. For multi-contract
-compares, rank all candidates and recommend a single winner with ranked runners-up.
+Comparative Analysis & Decision Framework (ONLY when compare_contracts succeeds):
+When the user asks to compare vendor contracts AND the tool returns a successful
+comparison payload (not `contract_not_present`), do NOT merely list extracted text
+chunks or place markdown tables side-by-side. Act as a strategic advisor and decide
+which option is better / lower risk using objective operational criteria. For
+multi-contract compares, rank all candidates and recommend a single winner with
+ranked runners-up.
+If compare_contracts fails / returns not-present: HARD STOP with only
+“The contract information requested for the comparison is not available at the moment”
+— skip Quantitative Comparison, Risk Assessment, and Recommendation entirely.
 
 1) QUANTITATIVE COMPARISON
    - Weigh total contract value, annual cost, lifecycle duration (effective → expiration /

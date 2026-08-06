@@ -22,11 +22,24 @@ INVOICE_OOS_MESSAGE = (
     "This requires a separate data-linkage POC."
 )
 
+# Hard-stop copy when a compare cannot resolve the requested suppliers / IDs.
+COMPARE_CONTRACTS_UNAVAILABLE = (
+    "The contract information requested for the comparison is not available at the moment"
+)
+
 # Legacy offline-router hallucination / stale-runtime message. Never surface this.
 _DEFAULT_COMPARE_HALLUCINATION_RE = re.compile(
     r"No two resolvable compare sides detected;\s*"
     r"defaulting comparison to CON-0001 vs CON-0002\.?",
     re.I,
+)
+
+# Any of these in a compare reply means hard-stop (no table / recommendation).
+_COMPARE_HARD_STOP_MARKERS = (
+    COMPARE_CONTRACTS_UNAVAILABLE.lower(),
+    "no such contract is available",
+    "contract information is not present",
+    "defaulting comparison to con-0001",
 )
 
 # Hard out-of-scope guard for invoice / actual-payment systems (before tool selection).
@@ -450,15 +463,9 @@ def _summarize_compare_payload(
         return f"Contract comparison:\n{raw[:2000]}"
 
     if payload.get("error"):
-        # Missing-contract path: return only the not-available message.
-        if payload.get("error") == "contract_not_present":
-            message = str(payload.get("message") or "").strip()
-            if message:
-                return message
-            missing = payload.get("missing") or []
-            if missing:
-                return f"No such contract is available for {', '.join(str(m) for m in missing)}."
-            return "No such contract is available."
+        # Hard stop: no table, no recommendation, exact unavailable message only.
+        if payload.get("error") == "contract_not_present" or payload.get("hard_stop"):
+            return COMPARE_CONTRACTS_UNAVAILABLE
         return (
             f"Contract comparison failed: {payload.get('error')}\n"
             f"{json.dumps({k: payload.get(k) for k in ('side_criteria', 'resolved', 'errors', 'left', 'right') if k in payload}, default=str)[:1500]}"
@@ -491,7 +498,8 @@ def _summarize_compare_payload(
         payload = {**payload, "contracts": contracts}
 
     if len(contracts) < 2:
-        return "Contract comparison failed: fewer than two contracts resolved."
+        # Hard stop — never invent a default pair or emit a partial matrix.
+        return COMPARE_CONTRACTS_UNAVAILABLE
 
     ids = [str(row.get("ContractID")) for row in contracts]
     header_cols = " | ".join(_md_cell(cid) for cid in ids)
@@ -1128,12 +1136,10 @@ def _choose_tools(user_text: str) -> list[str]:
 
 
 def _is_no_such_contract_payload(payload: dict[str, Any]) -> bool:
-    if payload.get("error") == "contract_not_present":
+    if payload.get("error") == "contract_not_present" or payload.get("hard_stop"):
         return True
     message = str(payload.get("message") or "").lower()
-    return "no such contract is available" in message or (
-        "contract information is not present" in message
-    )
+    return any(marker in message for marker in _COMPARE_HARD_STOP_MARKERS)
 
 
 def _no_such_contract_text(labels: list[Any] | None = None) -> str:
@@ -1143,29 +1149,42 @@ def _no_such_contract_text(labels: list[Any] | None = None) -> str:
     return "No such contract is available."
 
 
+def compare_unavailable_message() -> str:
+    """Exact hard-stop copy for unresolved compare requests."""
+    return COMPARE_CONTRACTS_UNAVAILABLE
+
+
 def sanitize_default_compare_hallucination(
     text: str,
     *,
     user_text: str = "",
 ) -> str:
     """
-    Strip the legacy CON-0001 vs CON-0002 defaulting message if an LLM or stale
-    runtime still emits it. Prefer labeled missing-contract copy when possible.
+    Hard-stop any legacy default-compare hallucination or partial compare output
+    when the user asked to compare and contracts are unavailable.
     """
-    raw = str(text or "")
-    if not _DEFAULT_COMPARE_HALLUCINATION_RE.search(raw):
-        return raw
-    labels: list[str] = []
-    labels.extend(_extract_contract_ids(user_text))
-    labels.extend(_normalize_supplier_token(s) for s in _extract_suppliers(user_text))
-    # Also keep unknown multi-side tokens from the compare prompt.
-    for part in _split_compare_targets(user_text):
-        token = part.strip().strip("\"'")
-        if token and token not in labels and not _CONTRACT_ID_RE.fullmatch(token):
-            if not _extract_suppliers(token):
-                labels.append(_normalize_supplier_token(token))
-    labels = list(dict.fromkeys(label for label in labels if label))
-    return _no_such_contract_text(labels)
+    del user_text  # reserved for future labeled diagnostics; message is fixed.
+    raw = str(text or "").strip()
+    lowered = raw.lower()
+    if _DEFAULT_COMPARE_HALLUCINATION_RE.search(raw):
+        return COMPARE_CONTRACTS_UNAVAILABLE
+    if any(marker in lowered for marker in _COMPARE_HARD_STOP_MARKERS):
+        # Strip any appended table / recommendation that followed a not-available note.
+        if (
+            "field matrix" in lowered
+            or "## recommendation" in lowered
+            or "### contract comparison" in lowered
+            or "2-way" in lowered
+            or "n-way" in lowered
+        ):
+            return COMPARE_CONTRACTS_UNAVAILABLE
+        if lowered == COMPARE_CONTRACTS_UNAVAILABLE.lower():
+            return COMPARE_CONTRACTS_UNAVAILABLE
+        if lowered.startswith("no such contract is available") or lowered.startswith(
+            "contract information is not present"
+        ):
+            return COMPARE_CONTRACTS_UNAVAILABLE
+    return raw
 
 
 def _summarize_search_contracts(raw: str, *, limit: int = 10) -> str:
@@ -1510,14 +1529,11 @@ async def run_offline_turn(
                             + f": {', '.join(expanded_ids)}."
                         )
                     else:
-                        sections.append(
-                            _no_such_contract_text([vendor] if vendor else None)
-                        )
-                        continue
+                        # Hard stop: missing expansion set — no table / recommendation.
+                        return COMPARE_CONTRACTS_UNAVAILABLE
 
                 if not compare_kwargs:
-                    sections.append(_no_such_contract_text())
-                    continue
+                    return COMPARE_CONTRACTS_UNAVAILABLE
                 raw = await _ainvoke_tool(tool, **compare_kwargs)
 
                 # Enrich compare with spend + clause search (orchestrator layer only).
@@ -1527,10 +1543,9 @@ async def run_offline_turn(
                 except json.JSONDecodeError:
                     compare_payload = {}
 
-                # Missing contracts: return only the not-available message (no default compare).
+                # Hard stop: unresolved supplier/ID compare — exact message only.
                 if _is_no_such_contract_payload(compare_payload):
-                    sections.append(_summarize_compare_payload(raw))
-                    continue
+                    return COMPARE_CONTRACTS_UNAVAILABLE
 
                 contract_rows = compare_payload.get("contracts") or []
                 if len(contract_rows) < 2 and compare_payload.get("left_contract_id"):
@@ -1718,14 +1733,18 @@ async def run_offline_turn(
         "Offline cognitive router (Azure OpenAI bypassed due to "
         "USE_OFFLINE_MOCKS or network/firewall restrictions)."
     )
-    # Missing-contract compares / lookups: return only the not-available message.
-    if len(sections) == 1 and (
-        "no such contract is available" in sections[0].lower()
-        or "contract information is not present" in sections[0].lower()
-    ):
-        return sanitize_default_compare_hallucination(
-            sections[0].strip(),
-            user_text=user_text,
-        )
+    # Missing-contract compares / lookups: return only the hard-stop message.
+    if len(sections) == 1:
+        alone = sections[0].strip()
+        alone_l = alone.lower()
+        if alone_l == COMPARE_CONTRACTS_UNAVAILABLE.lower() or any(
+            marker in alone_l for marker in _COMPARE_HARD_STOP_MARKERS
+        ):
+            if "compare" in (user_text or "").lower() or _COMPARE_RE.search(user_text or ""):
+                return COMPARE_CONTRACTS_UNAVAILABLE
+            if alone_l.startswith("no such contract is available") or alone_l.startswith(
+                "contract information is not present"
+            ):
+                return alone
     reply = header + "\n\n" + "\n\n".join(sections)
     return sanitize_default_compare_hallucination(reply, user_text=user_text)

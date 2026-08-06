@@ -158,6 +158,9 @@ def _rows_payload(rows: list[dict[str, Any]], *, criteria: dict[str, Any] | None
 
 
 NO_SUCH_CONTRACT_AVAILABLE = "No such contract is available."
+COMPARE_CONTRACTS_UNAVAILABLE = (
+    "The contract information requested for the comparison is not available at the moment"
+)
 
 
 def _missing_contract_label(criteria: dict[str, Any] | None) -> str | None:
@@ -187,10 +190,11 @@ def _contract_not_present_payload(
     labels = [str(item).strip() for item in (missing or []) if str(item).strip()]
     return {
         "error": "contract_not_present",
-        "message": _no_such_contract_message(labels),
+        "message": COMPARE_CONTRACTS_UNAVAILABLE,
         "missing": labels,
         "side_criteria": side_criteria or [],
         "errors": errors or [],
+        "hard_stop": True,
     }
 
 
@@ -207,7 +211,7 @@ def _resolve_or_error(
     label = _missing_contract_label(criteria) or side_label
     return None, {
         "error": "contract_not_present",
-        "message": _no_such_contract_message([label]),
+        "message": COMPARE_CONTRACTS_UNAVAILABLE,
         "side": side_label,
         "criteria": criteria,
         "match_count": resolved.get("match_count", 0),

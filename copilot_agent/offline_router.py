@@ -712,13 +712,23 @@ def _split_compare_targets(text: str) -> list[str]:
     )
     parts = [part.strip(" .;:") for part in _COMPARE_SPLIT_RE.split(cleaned) if part and part.strip(" .;:")]
     # Drop residual connector-only / compare-only tokens.
-    filtered = [
-        part
-        for part in parts
-        if part and not re.fullmatch(r"(compar\w*|contracts?|agreements?|vendors?|suppliers?)", part, re.I)
-    ]
+    filtered = []
+    for part in parts:
+        if not part or re.fullmatch(
+            r"(compar\w*|contracts?|agreements?|vendors?|suppliers?)",
+            part,
+            re.I,
+        ):
+            continue
+        part = re.sub(
+            r"\s+(contracts?|agreements?|vendors?|suppliers?)\s*$",
+            "",
+            part,
+            flags=re.I,
+        ).strip(" .;:")
+        if part:
+            filtered.append(part)
     return filtered
-
 
 def _split_compare_sides(text: str) -> tuple[str, str] | None:
     """Backward-compatible pairwise split (first/last of N targets)."""

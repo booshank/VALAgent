@@ -54,4 +54,7 @@ def messages():
 
 
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=3978, threaded=True, use_reloader=False)
+    import os
+
+    port = int(os.getenv("MOCK_MESSAGES_PORT", "3978"))
+    app.run(host="127.0.0.1", port=port, threaded=True, use_reloader=False)

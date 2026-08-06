@@ -203,6 +203,47 @@ def test_oracle_vendor_not_blocked() -> None:
     print("oracle vendor routing OK", tools)
 
 
+def test_persona_memory_recall_routing() -> None:
+    from offline_router import _choose_tools, _summarize_persona_memory
+    import tempfile
+    from pathlib import Path
+    import os
+    import sys
+
+    assert _choose_tools("Show my previous searches") == ["persona_memory_recall"]
+    assert _choose_tools("Recall old conversations") == ["persona_memory_recall"]
+
+    repo = Path(__file__).resolve().parent.parent
+    sys.path.insert(0, str(repo))
+    from memory.store import PersonaMemoryStore
+
+    with tempfile.TemporaryDirectory() as tmp:
+        db = Path(tmp) / "recall.sqlite"
+        os.environ["VAL_MEMORY_DB"] = str(db)
+        store = PersonaMemoryStore(db)
+        store.ensure_persona("recall-user", "Recall User")
+        conv = store.ensure_conversation(None, "recall-user")
+        store.append_message(
+            conv["id"],
+            "user",
+            "Show contracts for Microsoft",
+            persona_id="recall-user",
+        )
+        store.update_latest_search_preview(
+            "recall-user",
+            conv["id"],
+            "33 Microsoft rows",
+        )
+        text = _summarize_persona_memory(
+            persona_id="recall-user",
+            user_text="Show my previous searches about Microsoft",
+        )
+        assert "Persona memory recall" in text
+        assert "Microsoft" in text
+        print("persona memory recall OK")
+
+
+
 def test_find_overlaps_tool_and_routing() -> None:
     from offline_router import _choose_tools
 
@@ -272,6 +313,7 @@ if __name__ == "__main__":
     test_compare_contracts_any_ids_and_nway()
     test_offline_router_compare_routing()
     test_oracle_vendor_not_blocked()
+    test_persona_memory_recall_routing()
     test_find_overlaps_tool_and_routing()
     test_explain_contract_risk_tool_and_routing()
     test_contract_repository_abstraction()

@@ -74,6 +74,8 @@ Strict Cognitive Routing Boundary — choose tools by intent domain:
 
 5. Localized Meta State / Operational Memory (session notes, prior decisions, embeddings)
    → Postgres / PGVector tools from the pgvector MCP server (when available).
+   Also use persistent persona memory (prior searches / conversations) when the user
+   asks to recall previous searches or old conversations for their persona.
 
 Rules:
 - Never invent financial figures or legal clauses; always ground answers in tool results.
@@ -235,14 +237,25 @@ async def get_agent_executor() -> AgentExecutor:
     return _agent_executor
 
 
-async def run_turn(user_text: str, chat_history: list[Any] | None = None) -> str:
+async def run_turn(
+    user_text: str,
+    chat_history: list[Any] | None = None,
+    *,
+    persona_id: str | None = None,
+    conversation_id: str | None = None,
+) -> str:
     """Execute one cognitive turn; returns the final assistant text."""
     if _force_offline_llm():
         logger.warning(
             "Using offline cognitive router "
             "(USE_OFFLINE_MOCKS / AZURE_OPENAI_FORCE_OFFLINE enabled)"
         )
-        return await run_offline_turn(user_text)
+        return await run_offline_turn(
+            user_text,
+            chat_history=chat_history,
+            persona_id=persona_id,
+            conversation_id=conversation_id,
+        )
 
     try:
         executor = await get_agent_executor()
@@ -259,7 +272,12 @@ async def run_turn(user_text: str, chat_history: list[Any] | None = None) -> str
                 "falling back to offline cognitive router",
                 exc,
             )
-            return await run_offline_turn(user_text)
+            return await run_offline_turn(
+                user_text,
+                chat_history=chat_history,
+                persona_id=persona_id,
+                conversation_id=conversation_id,
+            )
         raise
 
     output = result.get("output", "")

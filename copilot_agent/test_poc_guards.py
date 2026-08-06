@@ -134,14 +134,16 @@ assert expanded.get("error") is None, expanded
 assert len(expanded.get("contracts") or []) == 4
 assert all(row.get("SupplierName") == "Microsoft" for row in expanded["contracts"])
 
-# Missing contract(s): no default compare — not-present only
+# Missing contract(s): no default compare — not-available only
 missing_one = json.loads(
     server.compare_contracts(contract_refs="CON-0001,CON-9999")
 )
 assert missing_one.get("error") == "contract_not_present", missing_one
-assert "not present" in missing_one.get("message", "").lower()
+assert "no such contract is available" in missing_one.get("message", "").lower()
 assert "contracts" not in missing_one or not missing_one.get("contracts")
 assert "CON-9999" in missing_one.get("message", "")
+assert "defaulting" not in missing_one.get("message", "").lower()
+assert "CON-0002" not in missing_one.get("message", "")
 
 missing_both = json.loads(
     server.compare_contracts(contract_refs="CON-9998,CON-9999")
@@ -149,11 +151,28 @@ missing_both = json.loads(
 assert missing_both.get("error") == "contract_not_present", missing_both
 assert "difference_count" not in missing_both
 
+missing_suppliers = json.loads(
+    server.compare_contracts(supplier_names="IBM,Salesforce")
+)
+assert missing_suppliers.get("error") == "contract_not_present", missing_suppliers
+assert "no such contract is available" in missing_suppliers.get("message", "").lower()
+assert "defaulting" not in missing_suppliers.get("message", "").lower()
+assert "CON-0001" not in missing_suppliers.get("message", "")
+
+missing_search = json.loads(server.search_contracts(vendor="IBM", max_rows=10))
+assert missing_search.get("error") == "contract_not_present", missing_search
+assert "no such contract is available" in missing_search.get("message", "").lower()
+
+missing_profile = json.loads(server.get_contract_profile("CON-9999"))
+assert missing_profile.get("error") == "contract_not_present", missing_profile
+assert "no such contract is available" in missing_profile.get("message", "").lower()
+
 print(json.dumps({
     "pair": [pair.get("left_contract_id"), pair.get("right_contract_id")],
     "nway": sorted(ids),
     "expanded": [row.get("ContractID") for row in expanded["contracts"]],
     "missing_message": missing_one.get("message"),
+    "missing_suppliers": missing_suppliers.get("message"),
 }))
 """
     )
@@ -167,25 +186,52 @@ def test_offline_router_missing_contract_no_default_compare() -> None:
 
     payload = {
         "error": "contract_not_present",
-        "message": "Contract information is not present for CON-9999.",
+        "message": "No such contract is available for CON-9999.",
         "missing": ["CON-9999"],
     }
     summary = _summarize_compare_payload(json.dumps(payload))
-    assert summary == "Contract information is not present for CON-9999."
+    assert summary == "No such contract is available for CON-9999."
 
     async def _run() -> str:
         return await run_offline_turn("Compare CON-0001 and CON-9999")
 
     reply = asyncio.run(_run())
-    assert "Contract information is not present" in reply
+    assert "No such contract is available" in reply
     assert "CON-9999" in reply
     assert "2-way" not in reply
     assert "Field matrix" not in reply
     assert "defaulting" not in reply.lower()
-    # Alone — no offline preamble wrapping the not-present message.
-    assert reply.strip().startswith("Contract information is not present")
+    assert "CON-0001 vs CON-0002" not in reply
+    # Alone — no offline preamble wrapping the not-available message.
+    assert reply.strip().startswith("No such contract is available")
     print("missing contract no-default OK", reply.strip())
 
+    async def _run_suppliers() -> str:
+        return await run_offline_turn("Compare IBM and Salesforce contracts")
+
+    supplier_reply = asyncio.run(_run_suppliers())
+    assert "No such contract is available" in supplier_reply
+    assert "defaulting" not in supplier_reply.lower()
+    assert "CON-0001 vs CON-0002" not in supplier_reply
+    assert "Field matrix" not in supplier_reply
+    assert supplier_reply.strip().startswith("No such contract is available")
+    print("missing supplier compare OK", supplier_reply.strip())
+
+    async def _run_profile() -> str:
+        return await run_offline_turn("Show details for CON-9999")
+
+    profile_reply = asyncio.run(_run_profile())
+    assert "No such contract is available" in profile_reply
+    assert "CON-9999" in profile_reply
+    print("missing profile OK", profile_reply.strip())
+
+    async def _run_search() -> str:
+        return await run_offline_turn("Show contracts for IBM")
+
+    search_reply = asyncio.run(_run_search())
+    assert "No such contract is available" in search_reply
+    assert "IBM" in search_reply
+    print("missing vendor search OK", search_reply.strip())
 
 def test_offline_router_compare_routing() -> None:
     from offline_router import (

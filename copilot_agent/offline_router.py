@@ -443,15 +443,15 @@ def _summarize_compare_payload(
         return f"Contract comparison:\n{raw[:2000]}"
 
     if payload.get("error"):
-        # Missing-contract path: return only the not-present message.
-        if payload.get("error") == "contract_not_present" or payload.get("message"):
+        # Missing-contract path: return only the not-available message.
+        if payload.get("error") == "contract_not_present":
             message = str(payload.get("message") or "").strip()
             if message:
                 return message
             missing = payload.get("missing") or []
             if missing:
-                return f"Contract information is not present for {', '.join(str(m) for m in missing)}."
-            return "Contract information is not present."
+                return f"No such contract is available for {', '.join(str(m) for m in missing)}."
+            return "No such contract is available."
         return (
             f"Contract comparison failed: {payload.get('error')}\n"
             f"{json.dumps({k: payload.get(k) for k in ('side_criteria', 'resolved', 'errors', 'left', 'right') if k in payload}, default=str)[:1500]}"
@@ -1087,13 +1087,48 @@ def _choose_tools(user_text: str) -> list[str]:
     return list(dict.fromkeys(chosen))
 
 
+def _is_no_such_contract_payload(payload: dict[str, Any]) -> bool:
+    if payload.get("error") == "contract_not_present":
+        return True
+    message = str(payload.get("message") or "").lower()
+    return "no such contract is available" in message or (
+        "contract information is not present" in message
+    )
+
+
+def _no_such_contract_text(labels: list[Any] | None = None) -> str:
+    cleaned = [str(item).strip() for item in (labels or []) if str(item).strip()]
+    if cleaned:
+        return f"No such contract is available for {', '.join(cleaned)}."
+    return "No such contract is available."
+
+
 def _summarize_search_contracts(raw: str, *, limit: int = 10) -> str:
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError:
         return f"Structured contract search\n{raw[:2000]}"
+    if _is_no_such_contract_payload(payload):
+        message = str(payload.get("message") or "").strip()
+        if message:
+            return message
+        missing = payload.get("missing") or []
+        criteria = payload.get("criteria") or {}
+        labels = missing or [
+            criteria.get(key)
+            for key in ("vendor", "contract_type", "business_unit", "status")
+            if criteria.get(key)
+        ]
+        return _no_such_contract_text(labels)
     rows = payload.get("rows") or []
     criteria = payload.get("criteria") or {}
+    if not rows and any(criteria.get(k) for k in ("vendor", "contract_type")):
+        labels = [
+            criteria.get(key)
+            for key in ("vendor", "contract_type")
+            if criteria.get(key)
+        ]
+        return _no_such_contract_text(labels)
     lines = [
         f"Structured contract search ({payload.get('row_count', len(rows))} rows)",
         f"Filters: {criteria}" if any(criteria.values()) else "Filters: (none)",
@@ -1118,6 +1153,15 @@ def _summarize_contract_profile(raw: str) -> str:
         payload = json.loads(raw)
     except json.JSONDecodeError:
         return f"Contract profile\n{raw[:2000]}"
+    if _is_no_such_contract_payload(payload) or payload.get("error") in {
+        "Contract not found",
+        "contract_not_present",
+    }:
+        message = str(payload.get("message") or "").strip()
+        if message:
+            return message
+        cid = payload.get("contract_id")
+        return _no_such_contract_text([cid] if cid else None)
     if payload.get("error"):
         return f"Contract profile error: {payload.get('error')} ({payload.get('contract_id')})"
     profile = payload.get("profile") or {}
@@ -1402,13 +1446,12 @@ async def run_offline_turn(
                         )
                     else:
                         sections.append(
-                            "Contract information is not present"
-                            + (f" for {vendor}." if vendor else ".")
+                            _no_such_contract_text([vendor] if vendor else None)
                         )
                         continue
 
                 if not compare_kwargs:
-                    sections.append("Contract information is not present.")
+                    sections.append(_no_such_contract_text())
                     continue
                 raw = await _ainvoke_tool(tool, **compare_kwargs)
 
@@ -1419,11 +1462,8 @@ async def run_offline_turn(
                 except json.JSONDecodeError:
                     compare_payload = {}
 
-                # Missing contracts: return only the not-present message (no default compare).
-                if compare_payload.get("error") == "contract_not_present" or (
-                    compare_payload.get("message")
-                    and "not present" in str(compare_payload.get("message")).lower()
-                ):
+                # Missing contracts: return only the not-available message (no default compare).
+                if _is_no_such_contract_payload(compare_payload):
                     sections.append(_summarize_compare_payload(raw))
                     continue
 
@@ -1613,10 +1653,10 @@ async def run_offline_turn(
         "Offline cognitive router (Azure OpenAI bypassed due to "
         "USE_OFFLINE_MOCKS or network/firewall restrictions)."
     )
-    # Missing-contract compares: return only the not-present message.
-    if (
-        len(sections) == 1
-        and "contract information is not present" in sections[0].lower()
+    # Missing-contract compares / lookups: return only the not-available message.
+    if len(sections) == 1 and (
+        "no such contract is available" in sections[0].lower()
+        or "contract information is not present" in sections[0].lower()
     ):
         return sections[0].strip()
     return header + "\n\n" + "\n\n".join(sections)

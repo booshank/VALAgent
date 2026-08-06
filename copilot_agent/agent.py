@@ -68,6 +68,8 @@ Strict Cognitive Routing Boundary — choose tools by intent domain:
    To compare many contracts for one vendor, call `search_contracts` first, then
    `compare_contracts` with the returned IDs, or use `expand_supplier_matches=true`
    with one `supplier_names` value and `max_contracts`.
+   If any requested contract is missing, return only that contract-information-is-not-present
+   message — never invent substitutes or fall back to other contracts.
 
 4. Unstructured Deep Document Context (legal liabilities, contract language, raw PDF/text)
    → `search_cloud_blob_contracts` (Azure AI Search — not structured metadata search).

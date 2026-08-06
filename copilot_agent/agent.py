@@ -29,6 +29,7 @@ from config import get, require
 from mcp_clients import bridge
 from offline_router import (
     _COMPARE_RE,
+    _MEMORY_RECALL_RE,
     run_offline_turn,
     sanitize_default_compare_hallucination,
 )
@@ -83,7 +84,8 @@ Strict Cognitive Routing Boundary — choose tools by intent domain:
 5. Localized Meta State / Operational Memory (session notes, prior decisions, embeddings)
    → Postgres / PGVector tools from the pgvector MCP server (when available).
    Also use persistent persona memory (prior searches / conversations) when the user
-   asks to recall previous searches or old conversations for their persona.
+   asks to recall, retrieve, or show previous/saved searches for their persona.
+   For those intents, list the stored queries (and previews) — do not invent history.
 
 Rules:
 - Never invent financial figures or legal clauses; always ground answers in tool results.
@@ -260,14 +262,23 @@ async def run_turn(
     conversation_id: str | None = None,
 ) -> str:
     """Execute one cognitive turn; returns the final assistant text."""
-    # Compare intents use the deterministic offline router so missing vendors /
-    # contracts never fall through to an LLM-invented CON-0001 vs CON-0002 default.
-    force_offline = _force_offline_llm() or bool(_COMPARE_RE.search(user_text or ""))
+    # Compare + memory-recall intents use the deterministic offline router so
+    # missing vendors never invent CON-0001 defaults, and search history is
+    # always served from the SQLite persona store.
+    force_offline = (
+        _force_offline_llm()
+        or bool(_COMPARE_RE.search(user_text or ""))
+        or bool(_MEMORY_RECALL_RE.search(user_text or ""))
+    )
     if force_offline:
         if _force_offline_llm():
             logger.warning(
                 "Using offline cognitive router "
                 "(USE_OFFLINE_MOCKS / AZURE_OPENAI_FORCE_OFFLINE enabled)"
+            )
+        elif _MEMORY_RECALL_RE.search(user_text or ""):
+            logger.info(
+                "Using offline cognitive router for persona memory recall"
             )
         else:
             logger.info(

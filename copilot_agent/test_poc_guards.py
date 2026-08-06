@@ -388,6 +388,7 @@ def test_persona_memory_recall_routing() -> None:
 
     assert _choose_tools("Show my previous searches") == ["persona_memory_recall"]
     assert _choose_tools("Recall old conversations") == ["persona_memory_recall"]
+    assert _choose_tools("Retrieve my saved searches") == ["persona_memory_recall"]
 
     repo = Path(__file__).resolve().parent.parent
     sys.path.insert(0, str(repo))

@@ -23,7 +23,7 @@ _DEFAULT_DB = _REPO_ROOT / "data" / "persona_memory.sqlite"
 _SEARCH_LIKE_RE = re.compile(
     r"\b("
     r"search|find|show|list|compare|expir\w*|overlap\w*|risk|profile|"
-    r"contract|vendor|supplier|renewal|missing|spend"
+    r"contract|vendor|supplier|renewal|missing|spend|retrieve|recall|history"
     r")\b",
     re.I,
 )
@@ -100,6 +100,7 @@ class PersonaMemoryStore:
                     query TEXT NOT NULL,
                     result_preview TEXT,
                     created_at TEXT NOT NULL,
+                    saved INTEGER NOT NULL DEFAULT 0,
                     FOREIGN KEY (persona_id) REFERENCES personas(id)
                 );
                 CREATE INDEX IF NOT EXISTS idx_conversations_persona
@@ -110,6 +111,15 @@ class PersonaMemoryStore:
                     ON searches(persona_id, created_at DESC);
                 """
             )
+            # Lightweight migration for DBs created before the `saved` column.
+            cols = {
+                str(row[1])
+                for row in conn.execute("PRAGMA table_info(searches)").fetchall()
+            }
+            if "saved" not in cols:
+                conn.execute(
+                    "ALTER TABLE searches ADD COLUMN saved INTEGER NOT NULL DEFAULT 0"
+                )
 
     def ensure_persona(self, persona_id: str, display_name: str | None = None) -> dict[str, Any]:
         persona_id = (persona_id or "").strip() or "default-user"
@@ -256,8 +266,8 @@ class PersonaMemoryStore:
             if record_search and role == "user" and is_search_like(content):
                 conn.execute(
                     "INSERT INTO searches "
-                    "(persona_id, conversation_id, query, result_preview, created_at) "
-                    "VALUES (?, ?, ?, ?, ?)",
+                    "(persona_id, conversation_id, query, result_preview, created_at, saved) "
+                    "VALUES (?, ?, ?, ?, ?, 0)",
                     (persona_id, conversation_id, content.strip(), None, now),
                 )
 
@@ -269,6 +279,91 @@ class PersonaMemoryStore:
             "meta": meta,
             "created_at": now,
         }
+
+    def save_search(
+        self,
+        persona_id: str,
+        query: str,
+        *,
+        conversation_id: str | None = None,
+        result_preview: str | None = None,
+        mark_saved: bool = True,
+    ) -> dict[str, Any]:
+        """Explicitly persist a search so it can be retrieved later."""
+        persona_id = (persona_id or "").strip() or "default-user"
+        query = (query or "").strip()
+        if not query:
+            raise ValueError("query is required to save a search")
+        self.ensure_persona(persona_id)
+        if conversation_id:
+            self.ensure_conversation(conversation_id, persona_id)
+        now = utc_now()
+        preview = None
+        if result_preview:
+            preview = result_preview.strip().replace("\n", " ")[:240]
+        with self._connect() as conn:
+            # Prefer updating an identical recent auto-saved row instead of duping.
+            existing = conn.execute(
+                "SELECT id FROM searches "
+                "WHERE persona_id = ? AND query = ? "
+                "ORDER BY id DESC LIMIT 1",
+                (persona_id, query),
+            ).fetchone()
+            if existing:
+                conn.execute(
+                    "UPDATE searches SET "
+                    "result_preview = COALESCE(?, result_preview), "
+                    "conversation_id = COALESCE(?, conversation_id), "
+                    "saved = ?, created_at = ? "
+                    "WHERE id = ?",
+                    (
+                        preview,
+                        conversation_id,
+                        1 if mark_saved else 0,
+                        now,
+                        int(existing["id"]),
+                    ),
+                )
+                search_id = int(existing["id"])
+            else:
+                cur = conn.execute(
+                    "INSERT INTO searches "
+                    "(persona_id, conversation_id, query, result_preview, created_at, saved) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        persona_id,
+                        conversation_id,
+                        query,
+                        preview,
+                        now,
+                        1 if mark_saved else 0,
+                    ),
+                )
+                search_id = int(cur.lastrowid)
+            row = conn.execute(
+                "SELECT * FROM searches WHERE id = ?", (search_id,)
+            ).fetchone()
+        return dict(row)
+
+    def delete_search(self, search_id: int, *, persona_id: str | None = None) -> bool:
+        with self._connect() as conn:
+            if persona_id:
+                cur = conn.execute(
+                    "DELETE FROM searches WHERE id = ? AND persona_id = ?",
+                    (int(search_id), persona_id),
+                )
+            else:
+                cur = conn.execute(
+                    "DELETE FROM searches WHERE id = ?", (int(search_id),)
+                )
+            return cur.rowcount > 0
+
+    def get_search(self, search_id: int) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM searches WHERE id = ?", (int(search_id),)
+            ).fetchone()
+        return dict(row) if row else None
 
     def update_latest_search_preview(
         self,
@@ -334,13 +429,22 @@ class PersonaMemoryStore:
         persona_id: str,
         *,
         limit: int = 50,
+        query: str | None = None,
+        saved_only: bool = False,
     ) -> list[dict[str, Any]]:
+        sql = "SELECT * FROM searches WHERE persona_id = ?"
+        params: list[Any] = [persona_id]
+        if saved_only:
+            sql += " AND saved = 1"
+        needle = (query or "").strip()
+        if needle:
+            sql += " AND (LOWER(query) LIKE ? OR LOWER(COALESCE(result_preview, '')) LIKE ?)"
+            like = f"%{needle.lower()}%"
+            params.extend([like, like])
+        sql += " ORDER BY saved DESC, created_at DESC, id DESC LIMIT ?"
+        params.append(max(1, int(limit)))
         with self._connect() as conn:
-            rows = conn.execute(
-                "SELECT * FROM searches WHERE persona_id = ? "
-                "ORDER BY created_at DESC, id DESC LIMIT ?",
-                (persona_id, max(1, int(limit))),
-            ).fetchall()
+            rows = conn.execute(sql, params).fetchall()
         return [dict(row) for row in rows]
 
     def recall(
@@ -351,16 +455,15 @@ class PersonaMemoryStore:
         limit: int = 8,
     ) -> dict[str, Any]:
         """Retrieve prior searches + recent conversations for a persona."""
-        searches = self.list_searches(persona_id, limit=limit)
-        conversations = self.list_conversations(persona_id, limit=limit)
+        # Search filter runs in SQL so older matching queries are not missed.
+        searches = self.list_searches(
+            persona_id,
+            limit=max(1, int(limit)),
+            query=query,
+        )
+        conversations = self.list_conversations(persona_id, limit=max(25, int(limit)))
         needle = (query or "").strip().lower()
         if needle:
-            searches = [
-                row
-                for row in searches
-                if needle in str(row.get("query") or "").lower()
-                or needle in str(row.get("result_preview") or "").lower()
-            ]
             conversations = [
                 row
                 for row in conversations

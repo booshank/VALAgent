@@ -74,6 +74,7 @@ Client B spawns `uvx mcp-server-pgvector`.
 | `get_expiring_contracts`, `get_vendor_spend_summary`, `compare_contracts`, `check_missing_contract_fields`, `search_cloud_blob_contracts`, `fabric_health_check` | `mcp_server/server.py` | `copilot_agent/agent.py` system prompt / `offline_router.py` |
 | PGVector tools (external) | `uvx mcp-server-pgvector` | `copilot_agent/mcp_clients.py`, system prompt |
 | `POST /api/messages` | `copilot_agent/app.py` | `test_ui/app.py` (`COPILOT_MESSAGES_URL`) |
+| Persona memory (SQLite) | `memory/store.py` → `data/persona_memory.sqlite` | Streamlit sidebar + `/api/memory/*` + offline recall |
 
 ## Offline staging mocks (`mcp_server`)
 
@@ -106,6 +107,15 @@ In Azure Portal → your OpenAI resource → **Networking**:
 2. Allowlist this environment’s egress IPs (example observed): `52.43.50.137`, `44.229.36.33`
 
 Until that allowlist is updated, local chat uses the offline router automatically.
+
+## Persona memory (persistent searches / conversations)
+
+Streamlit and the Cognitive Routing Agent share a SQLite persona store at
+`data/persona_memory.sqlite` (override with `VAL_MEMORY_DB`).
+
+- Sidebar: choose persona, browse previous conversations, re-run prior searches
+- Ask the agent: “Show my previous searches” / “Recall old conversations”
+- Helper APIs: `GET /api/memory/searches?persona_id=…`, `GET /api/memory/conversations?persona_id=…`
 
 ## Testing the Validation UI
 

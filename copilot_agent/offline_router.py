@@ -129,6 +129,15 @@ _COMPARE_LIMIT_RE = re.compile(
     r"\b(\d+)\s*[- ]\s*way\b",
     re.I,
 )
+_MEMORY_RECALL_RE = re.compile(
+    r"\b("
+    r"previous\s+search(?:es)?|prior\s+search(?:es)?|last\s+search|"
+    r"old\s+conversation(?:s)?|previous\s+conversation(?:s)?|"
+    r"what\s+did\s+i\s+(?:ask|search)|recall|remember|"
+    r"search\s+history|conversation\s+history|persona\s+memory"
+    r")\b",
+    re.I,
+)
 
 
 def _tool_map(tools: list[BaseTool]) -> dict[str, BaseTool]:
@@ -1028,6 +1037,9 @@ def is_invoice_out_of_scope(user_text: str) -> bool:
 def _choose_tools(user_text: str) -> list[str]:
     text = user_text.strip()
     chosen: list[str] = []
+    if _MEMORY_RECALL_RE.search(text):
+        # Memory recall is handled locally (no MCP tool required).
+        return ["persona_memory_recall"]
     if _COMPARE_RE.search(text):
         chosen.append("compare_contracts")
     if _OVERLAP_RE.search(text):
@@ -1192,16 +1204,92 @@ def _summarize_risk_explanations(raw: str, *, limit: int = 8) -> str:
     return "\n".join(lines)
 
 
-async def run_offline_turn(user_text: str) -> str:
+def _summarize_persona_memory(
+    *,
+    persona_id: str,
+    user_text: str,
+    chat_history: list[Any] | None = None,
+) -> str:
+    try:
+        import sys
+        from pathlib import Path
+
+        repo_root = Path(__file__).resolve().parent.parent
+        if str(repo_root) not in sys.path:
+            sys.path.insert(0, str(repo_root))
+        from memory.store import get_memory_store
+    except Exception as exc:  # noqa: BLE001
+        return f"Persona memory is unavailable ({exc})."
+
+    store = get_memory_store()
+    store.ensure_persona(persona_id)
+    # Prefer an explicit topic after recall verbs; otherwise list recent memory.
+    topic = None
+    for pattern in (
+        r"\babout\s+(.+)$",
+        r"\bfor\s+(.+)$",
+        r"\bregarding\s+(.+)$",
+    ):
+        match = re.search(pattern, user_text, re.I)
+        if match:
+            topic = match.group(1).strip(" .?!\"'")
+            break
+    recalled = store.recall(persona_id, query=topic, limit=8)
+    lines = [
+        f"### Persona memory recall (`{persona_id}`)",
+        "",
+    ]
+    searches = recalled.get("searches") or []
+    conversations = recalled.get("conversations") or []
+    if not searches and not conversations:
+        lines.append("No prior searches or conversations are stored for this persona yet.")
+    if searches:
+        lines.append("#### Previous searches")
+        for idx, row in enumerate(searches, start=1):
+            preview = str(row.get("result_preview") or "").strip()
+            lines.append(
+                f"{idx}. {row.get('query')}"
+                + (f" — {preview[:120]}" if preview else "")
+                + f" ({row.get('created_at')})"
+            )
+        lines.append("")
+    if conversations:
+        lines.append("#### Previous conversations")
+        for idx, row in enumerate(conversations, start=1):
+            title = row.get("title") or row.get("first_user_message") or row.get("id")
+            lines.append(
+                f"{idx}. {title} · {row.get('message_count', 0)} messages "
+                f"({row.get('updated_at')})"
+            )
+    if chat_history:
+        lines.extend(["", f"Active chat history turns available: {len(chat_history)}"])
+    return "\n".join(lines)
+
+
+async def run_offline_turn(
+    user_text: str,
+    chat_history: list[Any] | None = None,
+    *,
+    persona_id: str | None = None,
+    conversation_id: str | None = None,
+) -> str:
     """Intent-route to MCP tools without calling Azure OpenAI."""
+    del conversation_id  # reserved for future turn-scoped memory tools
     if is_invoice_out_of_scope(user_text):
         return INVOICE_OOS_MESSAGE
+
+    selected = _choose_tools(user_text)
+    if selected == ["persona_memory_recall"]:
+        return _summarize_persona_memory(
+            persona_id=persona_id or "default-user",
+            user_text=user_text,
+            chat_history=chat_history,
+        )
 
     # Lazy import so guardrail unit checks do not require MCP adapter stack.
     from mcp_clients import bridge
 
     tools = _tool_map(await bridge.get_tools())
-    selected = _choose_tools(user_text)
     contract_ids = _extract_contract_ids(user_text)
     suppliers = _extract_suppliers(user_text)
     contract_types = _extract_contract_types(user_text)
@@ -1215,6 +1303,20 @@ async def run_offline_turn(user_text: str) -> str:
         annual_cost=annual_costs[0] if len(annual_costs) == 1 else None,
     )
     sections: list[str] = []
+
+    # Light context from prior turns when the user refers back without an explicit recall.
+    if chat_history and re.search(r"\b(that|those|previous|earlier|same)\b", user_text, re.I):
+        recent = []
+        for item in chat_history[-4:]:
+            content = getattr(item, "content", None)
+            if content:
+                recent.append(str(content)[:160])
+            elif isinstance(item, dict) and item.get("content"):
+                recent.append(str(item["content"])[:160])
+        if recent:
+            sections.append(
+                "Context from prior turns in this conversation:\n- " + "\n- ".join(recent)
+            )
 
     for name in selected:
         tool = tools.get(name)

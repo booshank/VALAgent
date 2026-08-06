@@ -4,21 +4,33 @@ Cognitive Routing Agent — Flask ingress for Microsoft Bot Framework activities
 `/api/messages` accepts Bot Framework JSON payloads and runs the LangChain
 agent on a dedicated asyncio loop in a background thread to avoid Flask
 thread locking / nested-loop deadlocks.
+
+Persists persona conversations in the shared SQLite memory store and feeds
+prior turns back into the agent as chat history.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 import threading
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from flask import Flask, jsonify, request
+from langchain_core.messages import AIMessage, HumanMessage
 
 from agent import run_turn
 from config import get
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from memory.store import get_memory_store  # noqa: E402
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -63,6 +75,36 @@ def _conversation_id(activity: dict[str, Any]) -> str:
     return str(activity.get("conversationId") or "default")
 
 
+def _persona_from_activity(activity: dict[str, Any]) -> tuple[str, str]:
+    channel_data = activity.get("channelData") or {}
+    sender = activity.get("from") or {}
+    persona_id = (
+        (channel_data.get("personaId") if isinstance(channel_data, dict) else None)
+        or sender.get("id")
+        or "default-user"
+    )
+    persona_name = (
+        (channel_data.get("personaName") if isinstance(channel_data, dict) else None)
+        or sender.get("name")
+        or str(persona_id)
+    )
+    return str(persona_id), str(persona_name)
+
+
+def _history_messages(conversation_id: str) -> list[Any]:
+    store = get_memory_store()
+    history = store.chat_history_dicts(conversation_id, limit=20)
+    messages: list[Any] = []
+    for item in history:
+        role = str(item.get("role") or "").lower()
+        content = str(item.get("content") or "")
+        if role in {"user", "human"}:
+            messages.append(HumanMessage(content=content))
+        elif role in {"assistant", "ai"}:
+            messages.append(AIMessage(content=content))
+    return messages
+
+
 def _build_reply(activity: dict[str, Any], text: str) -> dict[str, Any]:
     now = datetime.now(timezone.utc).isoformat()
     return {
@@ -82,6 +124,36 @@ def _build_reply(activity: dict[str, Any], text: str) -> dict[str, Any]:
 @app.get("/health")
 def health() -> Any:
     return jsonify({"status": "ok", "service": "val-copilot-agent"})
+
+
+@app.get("/api/memory/searches")
+def memory_searches() -> Any:
+    """List prior searches for a persona (Validation UI / tooling helper)."""
+    persona_id = (request.args.get("persona_id") or "default-user").strip()
+    limit = int(request.args.get("limit") or 25)
+    store = get_memory_store()
+    store.ensure_persona(persona_id)
+    return jsonify(
+        {
+            "persona_id": persona_id,
+            "searches": store.list_searches(persona_id, limit=limit),
+        }
+    )
+
+
+@app.get("/api/memory/conversations")
+def memory_conversations() -> Any:
+    """List prior conversations for a persona."""
+    persona_id = (request.args.get("persona_id") or "default-user").strip()
+    limit = int(request.args.get("limit") or 25)
+    store = get_memory_store()
+    store.ensure_persona(persona_id)
+    return jsonify(
+        {
+            "persona_id": persona_id,
+            "conversations": store.list_conversations(persona_id, limit=limit),
+        }
+    )
 
 
 @app.post("/api/messages")
@@ -105,22 +177,44 @@ def messages() -> Any:
     if not user_text:
         return jsonify({"error": "Activity text is required"}), 400
 
+    conversation_id = _conversation_id(activity)
+    persona_id, persona_name = _persona_from_activity(activity)
+    store = get_memory_store()
+    store.ensure_persona(persona_id, persona_name)
+    store.ensure_conversation(conversation_id, persona_id)
+
     logger.info(
-        "Inbound activity activityId=%s conversationId=%s channelId=%s",
+        "Inbound activity activityId=%s conversationId=%s personaId=%s channelId=%s",
         _activity_id(activity),
-        _conversation_id(activity),
+        conversation_id,
+        persona_id,
         activity.get("channelId"),
     )
 
+    # History excludes the current turn (UI may already have persisted it).
+    chat_history = _history_messages(conversation_id)
+    if chat_history and isinstance(chat_history[-1], HumanMessage):
+        if str(chat_history[-1].content).strip() == user_text:
+            chat_history = chat_history[:-1]
+
     try:
-        answer = _submit(run_turn(user_text))
+        answer = _submit(
+            run_turn(
+                user_text,
+                chat_history=chat_history,
+                persona_id=persona_id,
+                conversation_id=conversation_id,
+            )
+        )
     except Exception as exc:  # noqa: BLE001
         logger.exception("Agent turn failed")
         answer = f"Sorry — I hit an error while processing that: {exc}"
 
+    # Persistence of turns is owned by the Validation UI (and any direct API
+    # clients that write to the shared memory store). The agent reads history
+    # only, to avoid duplicate user/assistant rows on the Streamlit path.
+
     reply = _build_reply(activity, answer)
-    # Bot Framework clients often expect 200/201 with the activity body or empty.
-    # Returning the reply activity enables the Streamlit validation UI to display it.
     return jsonify(reply), 200
 
 

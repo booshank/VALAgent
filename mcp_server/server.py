@@ -157,7 +157,10 @@ def _rows_payload(rows: list[dict[str, Any]], *, criteria: dict[str, Any] | None
     }
 
 
-CONTRACT_INFO_NOT_PRESENT = "Contract information is not present."
+NO_SUCH_CONTRACT_AVAILABLE = "No such contract is available."
+COMPARE_CONTRACTS_UNAVAILABLE = (
+    "The contract information requested for the comparison is not available at the moment"
+)
 
 
 def _missing_contract_label(criteria: dict[str, Any] | None) -> str | None:
@@ -171,6 +174,13 @@ def _missing_contract_label(criteria: dict[str, Any] | None) -> str | None:
     return None
 
 
+def _no_such_contract_message(labels: list[str] | None = None) -> str:
+    cleaned = [str(item).strip() for item in (labels or []) if str(item).strip()]
+    if cleaned:
+        return f"No such contract is available for {', '.join(cleaned)}."
+    return NO_SUCH_CONTRACT_AVAILABLE
+
+
 def _contract_not_present_payload(
     *,
     missing: list[str] | None = None,
@@ -178,15 +188,13 @@ def _contract_not_present_payload(
     errors: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     labels = [str(item).strip() for item in (missing or []) if str(item).strip()]
-    message = CONTRACT_INFO_NOT_PRESENT
-    if labels:
-        message = f"Contract information is not present for {', '.join(labels)}."
     return {
         "error": "contract_not_present",
-        "message": message,
+        "message": COMPARE_CONTRACTS_UNAVAILABLE,
         "missing": labels,
         "side_criteria": side_criteria or [],
         "errors": errors or [],
+        "hard_stop": True,
     }
 
 
@@ -203,7 +211,7 @@ def _resolve_or_error(
     label = _missing_contract_label(criteria) or side_label
     return None, {
         "error": "contract_not_present",
-        "message": f"Contract information is not present for {label}.",
+        "message": COMPARE_CONTRACTS_UNAVAILABLE,
         "side": side_label,
         "criteria": criteria,
         "match_count": resolved.get("match_count", 0),
@@ -511,6 +519,10 @@ def compare_contracts(
 
     Returns:
         JSON string with N-way field matrix (and pairwise compatibility fields when N=2).
+        If any requested supplier/contract ID cannot be resolved, returns a hard-stop
+        payload with error=contract_not_present and message:
+        "The contract information requested for the comparison is not available at the moment"
+        (no partial compare, no default CON-0001/CON-0002 fallback).
     """
     rows = _load_vendor_contracts(max_rows=500)
     side_criteria = _build_side_criteria_list(
@@ -766,15 +778,38 @@ def search_contracts(
         max_rows=max(1, int(max_rows)),
     )
     projected = [normalize_contract_search_row(row) for row in filtered]
+    criteria = {
+        "vendor": vendor,
+        "business_unit": business_unit,
+        "status": status,
+        "contract_type": contract_type,
+    }
+    # Specific vendor/type lookup with zero hits → explicit not-available signal
+    # (prevents agents from inventing default compares like CON-0001 vs CON-0002).
+    lookup_labels = [
+        str(value).strip()
+        for key in ("vendor", "contract_type")
+        for value in [criteria.get(key)]
+        if value is not None and str(value).strip()
+    ]
+    if not projected and lookup_labels:
+        return json.dumps(
+            {
+                "tool": "search_contracts",
+                "error": "contract_not_present",
+                "message": _no_such_contract_message(lookup_labels),
+                "missing": lookup_labels,
+                "criteria": criteria,
+                "row_count": 0,
+                "rows": [],
+                "source": SOURCE_LABEL,
+            },
+            default=str,
+        )
     return json.dumps(
         {
             "tool": "search_contracts",
-            "criteria": {
-                "vendor": vendor,
-                "business_unit": business_unit,
-                "status": status,
-                "contract_type": contract_type,
-            },
+            "criteria": criteria,
             "row_count": len(projected),
             "rows": projected,
             "source": SOURCE_LABEL,
@@ -800,13 +835,16 @@ def get_contract_profile(contract_id: str) -> str:
             default=str,
         )
     repo = get_contract_repository()
-    contract = repo.get_by_id(str(contract_id).strip())
+    cid = str(contract_id).strip()
+    contract = repo.get_by_id(cid)
     if contract is None:
         return json.dumps(
             {
-                "error": "Contract not found",
+                "error": "contract_not_present",
+                "message": _no_such_contract_message([cid]),
+                "missing": [cid],
                 "tool": "get_contract_profile",
-                "contract_id": contract_id,
+                "contract_id": cid,
                 "match_count": 0,
                 "candidates": [],
             },

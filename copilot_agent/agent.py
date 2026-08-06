@@ -27,7 +27,11 @@ from langchain_openai import AzureChatOpenAI
 
 from config import get, require
 from mcp_clients import bridge
-from offline_router import run_offline_turn
+from offline_router import (
+    _COMPARE_RE,
+    run_offline_turn,
+    sanitize_default_compare_hallucination,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -68,8 +72,10 @@ Strict Cognitive Routing Boundary — choose tools by intent domain:
    To compare many contracts for one vendor, call `search_contracts` first, then
    `compare_contracts` with the returned IDs, or use `expand_supplier_matches=true`
    with one `supplier_names` value and `max_contracts`.
-   If any requested contract is missing, return only that contract-information-is-not-present
-   message — never invent substitutes or fall back to other contracts.
+   If any requested contract or supplier has no match, HARD STOP immediately.
+   Reply with exactly this message and nothing else (no table, no recommendation,
+   no default CON-0001/CON-0002 compare, no invented substitutes):
+   “The contract information requested for the comparison is not available at the moment”
 
 4. Unstructured Deep Document Context (legal liabilities, contract language, raw PDF/text)
    → `search_cloud_blob_contracts` (Azure AI Search — not structured metadata search).
@@ -83,17 +89,24 @@ Rules:
 - Never invent financial figures or legal clauses; always ground answers in tool results.
 - Prefer the narrowest tool that satisfies the user intent.
 - Prefer `search_contracts` / `get_contract_profile` over document search for metadata questions.
+- When a tool returns `error: contract_not_present` or the comparison-unavailable message,
+  relay that exact message verbatim and STOP — do not emit tables, recommendations,
+  default compares, or invented IDs.
 - When multiple domains apply, call each relevant tool and synthesize a single answer.
 - Keep responses concise and cite which data source backed each claim.
 - Do not modify, bypass, or replace data-retrieval tools; advanced lifecycle analysis happens
   only in your cognitive reasoning cycle after tools return evidence.
 
-Comparative Analysis & Decision Framework (MANDATORY for compare intents):
-When the user asks to compare vendor contracts, agreements, or spending records
-(including 3+ contracts), do NOT merely list extracted text chunks or place
-markdown tables side-by-side. Act as a strategic advisor and decide which option
-is better / lower risk using objective operational criteria. For multi-contract
-compares, rank all candidates and recommend a single winner with ranked runners-up.
+Comparative Analysis & Decision Framework (ONLY when compare_contracts succeeds):
+When the user asks to compare vendor contracts AND the tool returns a successful
+comparison payload (not `contract_not_present`), do NOT merely list extracted text
+chunks or place markdown tables side-by-side. Act as a strategic advisor and decide
+which option is better / lower risk using objective operational criteria. For
+multi-contract compares, rank all candidates and recommend a single winner with
+ranked runners-up.
+If compare_contracts fails / returns not-present: HARD STOP with only
+“The contract information requested for the comparison is not available at the moment”
+— skip Quantitative Comparison, Risk Assessment, and Recommendation entirely.
 
 1) QUANTITATIVE COMPARISON
    - Weigh total contract value, annual cost, lifecycle duration (effective → expiration /
@@ -247,17 +260,26 @@ async def run_turn(
     conversation_id: str | None = None,
 ) -> str:
     """Execute one cognitive turn; returns the final assistant text."""
-    if _force_offline_llm():
-        logger.warning(
-            "Using offline cognitive router "
-            "(USE_OFFLINE_MOCKS / AZURE_OPENAI_FORCE_OFFLINE enabled)"
-        )
-        return await run_offline_turn(
+    # Compare intents use the deterministic offline router so missing vendors /
+    # contracts never fall through to an LLM-invented CON-0001 vs CON-0002 default.
+    force_offline = _force_offline_llm() or bool(_COMPARE_RE.search(user_text or ""))
+    if force_offline:
+        if _force_offline_llm():
+            logger.warning(
+                "Using offline cognitive router "
+                "(USE_OFFLINE_MOCKS / AZURE_OPENAI_FORCE_OFFLINE enabled)"
+            )
+        else:
+            logger.info(
+                "Using offline cognitive router for deterministic compare intent"
+            )
+        reply = await run_offline_turn(
             user_text,
             chat_history=chat_history,
             persona_id=persona_id,
             conversation_id=conversation_id,
         )
+        return sanitize_default_compare_hallucination(reply, user_text=user_text)
 
     try:
         executor = await get_agent_executor()
@@ -274,15 +296,18 @@ async def run_turn(
                 "falling back to offline cognitive router",
                 exc,
             )
-            return await run_offline_turn(
+            reply = await run_offline_turn(
                 user_text,
                 chat_history=chat_history,
                 persona_id=persona_id,
                 conversation_id=conversation_id,
             )
+            return sanitize_default_compare_hallucination(reply, user_text=user_text)
         raise
 
     output = result.get("output", "")
     if isinstance(output, AIMessage):
-        return str(output.content)
-    return str(output)
+        text = str(output.content)
+    else:
+        text = str(output)
+    return sanitize_default_compare_hallucination(text, user_text=user_text)

@@ -134,26 +134,53 @@ assert expanded.get("error") is None, expanded
 assert len(expanded.get("contracts") or []) == 4
 assert all(row.get("SupplierName") == "Microsoft" for row in expanded["contracts"])
 
-# Missing contract(s): no default compare — not-present only
+# Missing contract(s): hard stop — exact unavailable message only (no table/recommendation)
 missing_one = json.loads(
     server.compare_contracts(contract_refs="CON-0001,CON-9999")
 )
 assert missing_one.get("error") == "contract_not_present", missing_one
-assert "not present" in missing_one.get("message", "").lower()
+assert missing_one.get("message") == (
+    "The contract information requested for the comparison is not available at the moment"
+), missing_one
+assert missing_one.get("hard_stop") is True
 assert "contracts" not in missing_one or not missing_one.get("contracts")
-assert "CON-9999" in missing_one.get("message", "")
+assert "defaulting" not in missing_one.get("message", "").lower()
+assert "CON-0002" not in missing_one.get("message", "")
+assert "Recommendation" not in missing_one.get("message", "")
 
 missing_both = json.loads(
     server.compare_contracts(contract_refs="CON-9998,CON-9999")
 )
 assert missing_both.get("error") == "contract_not_present", missing_both
+assert missing_both.get("message") == (
+    "The contract information requested for the comparison is not available at the moment"
+)
 assert "difference_count" not in missing_both
+
+missing_suppliers = json.loads(
+    server.compare_contracts(supplier_names="IBM,Salesforce")
+)
+assert missing_suppliers.get("error") == "contract_not_present", missing_suppliers
+assert missing_suppliers.get("message") == (
+    "The contract information requested for the comparison is not available at the moment"
+)
+assert "defaulting" not in missing_suppliers.get("message", "").lower()
+assert "CON-0001" not in missing_suppliers.get("message", "")
+
+missing_search = json.loads(server.search_contracts(vendor="IBM", max_rows=10))
+assert missing_search.get("error") == "contract_not_present", missing_search
+assert "no such contract is available" in missing_search.get("message", "").lower()
+
+missing_profile = json.loads(server.get_contract_profile("CON-9999"))
+assert missing_profile.get("error") == "contract_not_present", missing_profile
+assert "no such contract is available" in missing_profile.get("message", "").lower()
 
 print(json.dumps({
     "pair": [pair.get("left_contract_id"), pair.get("right_contract_id")],
     "nway": sorted(ids),
     "expanded": [row.get("ContractID") for row in expanded["contracts"]],
     "missing_message": missing_one.get("message"),
+    "missing_suppliers": missing_suppliers.get("message"),
 }))
 """
     )
@@ -163,28 +190,74 @@ print(json.dumps({
 def test_offline_router_missing_contract_no_default_compare() -> None:
     import asyncio
 
-    from offline_router import _summarize_compare_payload, run_offline_turn
+    from offline_router import (
+        COMPARE_CONTRACTS_UNAVAILABLE,
+        _summarize_compare_payload,
+        run_offline_turn,
+    )
 
     payload = {
         "error": "contract_not_present",
-        "message": "Contract information is not present for CON-9999.",
+        "message": COMPARE_CONTRACTS_UNAVAILABLE,
         "missing": ["CON-9999"],
+        "hard_stop": True,
     }
     summary = _summarize_compare_payload(json.dumps(payload))
-    assert summary == "Contract information is not present for CON-9999."
+    assert summary == COMPARE_CONTRACTS_UNAVAILABLE
+    assert "Recommendation" not in summary
+    assert "Field matrix" not in summary
+    assert "|" not in summary
 
     async def _run() -> str:
         return await run_offline_turn("Compare CON-0001 and CON-9999")
 
     reply = asyncio.run(_run())
-    assert "Contract information is not present" in reply
-    assert "CON-9999" in reply
+    assert reply.strip() == COMPARE_CONTRACTS_UNAVAILABLE
     assert "2-way" not in reply
     assert "Field matrix" not in reply
+    assert "Recommendation" not in reply
     assert "defaulting" not in reply.lower()
-    # Alone — no offline preamble wrapping the not-present message.
-    assert reply.strip().startswith("Contract information is not present")
+    assert "CON-0001 vs CON-0002" not in reply
     print("missing contract no-default OK", reply.strip())
+
+    async def _run_suppliers() -> str:
+        return await run_offline_turn("Compare IBM and Salesforce contracts")
+
+    supplier_reply = asyncio.run(_run_suppliers())
+    assert supplier_reply.strip() == COMPARE_CONTRACTS_UNAVAILABLE
+    assert "defaulting" not in supplier_reply.lower()
+    assert "CON-0001 vs CON-0002" not in supplier_reply
+    assert "Field matrix" not in supplier_reply
+    assert "Recommendation" not in supplier_reply
+    print("missing supplier compare OK", supplier_reply.strip())
+
+    async def _run_profile() -> str:
+        return await run_offline_turn("Show details for CON-9999")
+
+    profile_reply = asyncio.run(_run_profile())
+    assert "No such contract is available" in profile_reply
+    assert "CON-9999" in profile_reply
+    print("missing profile OK", profile_reply.strip())
+
+    async def _run_search() -> str:
+        return await run_offline_turn("Show contracts for IBM")
+
+    search_reply = asyncio.run(_run_search())
+    assert "No such contract is available" in search_reply
+    assert "IBM" in search_reply
+    print("missing vendor search OK", search_reply.strip())
+
+    async def _run_mixed() -> str:
+        return await run_offline_turn("Compare Microsoft and AcmeCorp")
+
+    mixed_reply = asyncio.run(_run_mixed())
+    assert mixed_reply.strip() == COMPARE_CONTRACTS_UNAVAILABLE
+    assert "defaulting" not in mixed_reply.lower()
+    assert "CON-0001 vs CON-0002" not in mixed_reply
+    assert "Field matrix" not in mixed_reply
+    assert "2-way" not in mixed_reply
+    assert "Recommendation" not in mixed_reply
+    print("mixed known/unknown supplier compare OK", mixed_reply.strip())
 
 
 def test_offline_router_compare_routing() -> None:
@@ -232,7 +305,67 @@ def test_offline_router_compare_routing() -> None:
     )
     assert kwargs3.get("expand_matches") is True
     assert "CON-0001,CON-0002" not in str(kwargs3)
-    print("offline compare routing OK", kwargs, kwargs2, kwargs3)
+
+    # Known vendor + unknown vendor must NOT collapse into Microsoft expansion
+    # (that previously produced an implicit CON-0001 vs CON-0002 style compare).
+    q4 = "Compare Microsoft and AcmeCorp"
+    kwargs4 = _build_compare_kwargs_from_text(
+        q4,
+        contract_ids=[],
+        suppliers=_extract_suppliers(q4),
+        contract_names=[],
+        contract_types=[],
+        annual_costs=[],
+    )
+    assert kwargs4.get("expand_matches") in (None, False)
+    names4 = [n.strip() for n in str(kwargs4.get("supplier_names") or "").split(",") if n.strip()]
+    assert "Microsoft" in names4
+    assert any(n.lower() == "acmecorp" for n in names4), kwargs4
+
+    q5 = "Compare FooVendor and BarVendor contracts"
+    kwargs5 = _build_compare_kwargs_from_text(
+        q5,
+        contract_ids=[],
+        suppliers=_extract_suppliers(q5),
+        contract_names=[],
+        contract_types=[],
+        annual_costs=[],
+    )
+    assert kwargs5.get("expand_matches") in (None, False)
+    names5 = [n.strip() for n in str(kwargs5.get("supplier_names") or "").split(",") if n.strip()]
+    assert len(names5) >= 2, kwargs5
+    print("offline compare routing OK", kwargs, kwargs2, kwargs3, kwargs4, kwargs5)
+
+
+def test_sanitize_default_compare_hallucination() -> None:
+    from offline_router import (
+        COMPARE_CONTRACTS_UNAVAILABLE,
+        sanitize_default_compare_hallucination,
+    )
+
+    legacy = (
+        "No two resolvable compare sides detected; "
+        "defaulting comparison to CON-0001 vs CON-0002."
+    )
+    cleaned = sanitize_default_compare_hallucination(
+        legacy,
+        user_text="Compare IBM and Salesforce",
+    )
+    assert cleaned == COMPARE_CONTRACTS_UNAVAILABLE
+    assert "defaulting" not in cleaned.lower()
+    assert "Recommendation" not in cleaned
+    assert "Field matrix" not in cleaned
+
+    polluted = (
+        COMPARE_CONTRACTS_UNAVAILABLE
+        + "\n\n### Contract comparison (2-way)\n## Recommendation\nPick CON-0001"
+    )
+    cleaned2 = sanitize_default_compare_hallucination(
+        polluted,
+        user_text="Compare IBM and Salesforce",
+    )
+    assert cleaned2 == COMPARE_CONTRACTS_UNAVAILABLE
+    print("sanitize default compare OK", cleaned)
 
 
 def test_oracle_vendor_not_blocked() -> None:
@@ -356,6 +489,7 @@ if __name__ == "__main__":
     test_compare_contracts_any_ids_and_nway()
     test_offline_router_missing_contract_no_default_compare()
     test_offline_router_compare_routing()
+    test_sanitize_default_compare_hallucination()
     test_oracle_vendor_not_blocked()
     test_persona_memory_recall_routing()
     test_find_overlaps_tool_and_routing()

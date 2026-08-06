@@ -134,14 +134,57 @@ assert expanded.get("error") is None, expanded
 assert len(expanded.get("contracts") or []) == 4
 assert all(row.get("SupplierName") == "Microsoft" for row in expanded["contracts"])
 
+# Missing contract(s): no default compare — not-present only
+missing_one = json.loads(
+    server.compare_contracts(contract_refs="CON-0001,CON-9999")
+)
+assert missing_one.get("error") == "contract_not_present", missing_one
+assert "not present" in missing_one.get("message", "").lower()
+assert "contracts" not in missing_one or not missing_one.get("contracts")
+assert "CON-9999" in missing_one.get("message", "")
+
+missing_both = json.loads(
+    server.compare_contracts(contract_refs="CON-9998,CON-9999")
+)
+assert missing_both.get("error") == "contract_not_present", missing_both
+assert "difference_count" not in missing_both
+
 print(json.dumps({
     "pair": [pair.get("left_contract_id"), pair.get("right_contract_id")],
     "nway": sorted(ids),
     "expanded": [row.get("ContractID") for row in expanded["contracts"]],
+    "missing_message": missing_one.get("message"),
 }))
 """
     )
     print("compare_contracts any/n-way OK", out)
+
+
+def test_offline_router_missing_contract_no_default_compare() -> None:
+    import asyncio
+
+    from offline_router import _summarize_compare_payload, run_offline_turn
+
+    payload = {
+        "error": "contract_not_present",
+        "message": "Contract information is not present for CON-9999.",
+        "missing": ["CON-9999"],
+    }
+    summary = _summarize_compare_payload(json.dumps(payload))
+    assert summary == "Contract information is not present for CON-9999."
+
+    async def _run() -> str:
+        return await run_offline_turn("Compare CON-0001 and CON-9999")
+
+    reply = asyncio.run(_run())
+    assert "Contract information is not present" in reply
+    assert "CON-9999" in reply
+    assert "2-way" not in reply
+    assert "Field matrix" not in reply
+    assert "defaulting" not in reply.lower()
+    # Alone — no offline preamble wrapping the not-present message.
+    assert reply.strip().startswith("Contract information is not present")
+    print("missing contract no-default OK", reply.strip())
 
 
 def test_offline_router_compare_routing() -> None:
@@ -270,6 +313,7 @@ if __name__ == "__main__":
     test_search_contracts_microsoft()
     test_get_contract_profile_con0002()
     test_compare_contracts_any_ids_and_nway()
+    test_offline_router_missing_contract_no_default_compare()
     test_offline_router_compare_routing()
     test_oracle_vendor_not_blocked()
     test_find_overlaps_tool_and_routing()

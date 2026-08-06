@@ -434,6 +434,15 @@ def _summarize_compare_payload(
         return f"Contract comparison:\n{raw[:2000]}"
 
     if payload.get("error"):
+        # Missing-contract path: return only the not-present message.
+        if payload.get("error") == "contract_not_present" or payload.get("message"):
+            message = str(payload.get("message") or "").strip()
+            if message:
+                return message
+            missing = payload.get("missing") or []
+            if missing:
+                return f"Contract information is not present for {', '.join(str(m) for m in missing)}."
+            return "Contract information is not present."
         return (
             f"Contract comparison failed: {payload.get('error')}\n"
             f"{json.dumps({k: payload.get(k) for k in ('side_criteria', 'resolved', 'errors', 'left', 'right') if k in payload}, default=str)[:1500]}"
@@ -1291,18 +1300,13 @@ async def run_offline_turn(user_text: str) -> str:
                         )
                     else:
                         sections.append(
-                            "Could not expand enough contracts for comparison"
-                            + (f" under vendor `{vendor}`." if vendor else ".")
+                            "Contract information is not present"
+                            + (f" for {vendor}." if vendor else ".")
                         )
                         continue
 
                 if not compare_kwargs:
-                    sections.append(
-                        "Contract comparison needs at least two contract IDs, "
-                        "vendors, or names (for example: "
-                        "`Compare CON-0005 vs CON-0010 vs CON-0020` or "
-                        "`Compare all Microsoft contracts`)."
-                    )
+                    sections.append("Contract information is not present.")
                     continue
                 raw = await _ainvoke_tool(tool, **compare_kwargs)
 
@@ -1312,6 +1316,15 @@ async def run_offline_turn(user_text: str) -> str:
                     compare_payload = json.loads(raw)
                 except json.JSONDecodeError:
                     compare_payload = {}
+
+                # Missing contracts: return only the not-present message (no default compare).
+                if compare_payload.get("error") == "contract_not_present" or (
+                    compare_payload.get("message")
+                    and "not present" in str(compare_payload.get("message")).lower()
+                ):
+                    sections.append(_summarize_compare_payload(raw))
+                    continue
+
                 contract_rows = compare_payload.get("contracts") or []
                 if len(contract_rows) < 2 and compare_payload.get("left_contract_id"):
                     contract_rows = [
@@ -1498,4 +1511,10 @@ async def run_offline_turn(user_text: str) -> str:
         "Offline cognitive router (Azure OpenAI bypassed due to "
         "USE_OFFLINE_MOCKS or network/firewall restrictions)."
     )
+    # Missing-contract compares: return only the not-present message.
+    if (
+        len(sections) == 1
+        and "contract information is not present" in sections[0].lower()
+    ):
+        return sections[0].strip()
     return header + "\n\n" + "\n\n".join(sections)

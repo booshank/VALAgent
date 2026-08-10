@@ -43,9 +43,7 @@ Streamlit (test_ui/app.py)
 
 ## 2. Changes delivered in this POC (feature history)
 
-Newest merged work first. PRs refer to GitHub merges on `main`.
-
-### 2.1 Persona memory — save & retrieve previous searches (#16, #18)
+### 2.1 Persona memory — save & retrieve previous searches
 
 - Shared SQLite store at `data/persona_memory.sqlite` (override with `VAL_MEMORY_DB`).
 - **Auto-save** of search-like user queries per persona.
@@ -60,7 +58,7 @@ Newest merged work first. PRs refer to GitHub merges on `main`.
 - Streamlit sets `channelData.clientPersistsMemory=true` so Flask does not double-write; Flask persists for other clients.
 - Memory-recall intents are forced through the deterministic offline persona store.
 
-### 2.2 Compare hard-stop when contracts / suppliers are missing (#14, #15, #17)
+### 2.2 Compare hard-stop when contracts / suppliers are missing
 
 - `compare_contracts` supports **any contract IDs** and **N-way** compares (not only first/second catalog rows).
 - Supplier expansion: `supplier_names`, `expand_supplier_matches`, `max_contracts`.
@@ -80,7 +78,7 @@ Newest merged work first. PRs refer to GitHub merges on `main`.
 - Unknown vendor **search** / unknown contract **profile** return `error: contract_not_present` with “No such contract is available…”.
 - Compare intents (and memory-recall intents) use the offline router for deterministic behavior.
 
-### 2.3 LinkSquares fixtures replace old test contracts (#13)
+### 2.3 LinkSquares fixtures replace old test contracts
 
 - Active fixtures:
   - `mcp_server/LinSquare_Contracts_100_Updated_30bb.json`
@@ -88,7 +86,7 @@ Newest merged work first. PRs refer to GitHub merges on `main`.
 - Built into Gold-shaped offline tables by `linksquares_fixtures.py`.
 - Removed older `Test_contracts_0397` / `test_fixtures` POC files.
 
-### 2.4 Tool-layer hardening (#11, #9 and related)
+### 2.4 Tool-layer hardening
 
 - Overlap detection (`find_overlaps`) and risk explanations (`explain_contract_risk`).
 - `ContractRepository` abstraction for swappable data sources.
@@ -96,12 +94,12 @@ Newest merged work first. PRs refer to GitHub merges on `main`.
 - Contract lifecycle cognitive procedures in the system prompt (red-flag audit, counter-clause, exposure, renewal).
 - Comparative analysis decision framework when a compare **succeeds**.
 
-### 2.5 Offline staging & Azure OpenAI bypass (#5, #7)
+### 2.5 Offline staging & Azure OpenAI bypass
 
 - `USE_OFFLINE_MOCKS=true` installs a LinkSquares interceptor (patches `pyodbc` / `pandas.read_sql` / Azure Search client) while keeping tool bodies production-shaped.
 - `AZURE_OPENAI_FORCE_OFFLINE=true` or Azure OpenAI **403 VNet/firewall** → offline cognitive router (`offline_router.py`) still calling the same MCP tools.
 
-### 2.6 Docs & optional Foundry path (#12, Foundry commits)
+### 2.6 Docs & optional Foundry path
 
 - Architecture / process-flow PDF + PPTX generators.
 - Azure AI Foundry deployment guide (MD → PDF/HTML) and optional `deploy_to_foundry.py` (Foundry is **not** the primary runtime).
@@ -280,22 +278,6 @@ cd test_ui && .venv/bin/python test_streamlit_ui.py
 
 ---
 
-## 9. Related PR index
-
-| PR | Title / theme |
-| --- | --- |
-| #7 | Offline cognitive router on Azure OpenAI 403 |
-| #9 / #11 | Lifecycle procedures, overlaps, risk, repository hardening |
-| #12 | Process-flow docs + Foundry deploy refresh |
-| #13 | LinkSquares contract/agreement fixtures |
-| #14 | Any-ID + N-way `compare_contracts` |
-| #15 | No default compare when contracts missing |
-| #16 | Persistent persona conversation / search memory |
-| #17 | Missing compare/search/profile messaging + hard-stop refinements |
-| #18 | Explicit save / retrieve / pin / filter / delete for previous searches |
-
----
-
-## 10. One-liner summary
+## 9. One-liner summary
 
 VAL CoPilot is a three-layer tool-layer POC: Streamlit validation UI → Flask/LangChain (or offline) cognitive router → FastMCP Fabric/Search tools backed by LinkSquares fixtures offline. It supports N-way any-ID compares with a hard stop when suppliers/IDs are missing, structured search/profile/overlap/risk tools, and SQLite persona memory for saving and retrieving previous searches.

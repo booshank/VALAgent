@@ -121,9 +121,9 @@ def slide_cover(prs: Presentation) -> None:
     _set_run(p2.add_run(), "Synthetic Contract Intelligence\nTool-Layer POC — Architecture & Process Flow", 22, bold=True, color=TEAL_LIGHT)
     note = slide.shapes.add_textbox(Inches(1.2), Inches(5.3), Inches(10.9), Inches(1.4))
     for i, line in enumerate([
-        "Current: Streamlit → Flask /api/messages → LangChain or offline router → FastMCP tools → synthetic Gold data",
-        "Future: Streamlit/Teams → Azure AI Foundry Agent → same MCP/API tools → LinkSquares later",
-        "Not Azure AI Foundry-first today · Invoice/actual-spend systems are out of scope",
+        "Current: Streamlit → Flask /api/messages → LangChain or offline router → FastMCP → LinkSquares fixtures + persona memory",
+        "Future: Streamlit/Teams → Azure AI Foundry Agent → same MCP/API tools → live LinkSquares later",
+        "Compare hard-stop when IDs missing · Invoice/actual-spend OOS · Not Foundry-first today",
     ]):
         para = note.text_frame.paragraphs[0] if i == 0 else note.text_frame.add_paragraph()
         para.alignment = PP_ALIGN.CENTER
@@ -136,7 +136,7 @@ def slide_current_vs_future(prs: Presentation) -> None:
     add_box(
         slide, Inches(0.4), Inches(1.4), Inches(6.1), Inches(5.2), TEAL_LIGHT, TEAL,
         "CURRENT — Tool-Layer POC",
-        "Streamlit UI\n→ Flask POST /api/messages\n→ LangChain AgentExecutor\n   or offline cognitive router\n→ FastMCP tool server\n→ ContractRepository\n→ Synthetic Gold fixtures\n   (Fabric SQL / AI Search later)",
+        "Streamlit UI + Saved searches\n→ Flask POST /api/messages\n→ LangChain AgentExecutor\n   or offline cognitive router\n→ FastMCP tool server\n→ ContractRepository\n→ LinkSquares offline fixtures\n→ SQLite persona memory",
         16, 13,
     )
     add_box(
@@ -153,20 +153,26 @@ def slide_architecture(prs: Presentation) -> None:
     add_title_bar(
         slide,
         "2. Tool-Layer System Architecture",
-        "Three layers + replaceable ContractRepository + invoice OOS guardrail",
+        "Four layers + persona memory + replaceable ContractRepository",
     )
-    add_box(slide, Inches(0.35), Inches(1.25), Inches(12.6), Inches(1.15), BLUE_LIGHT, BLUE,
-            "Layer 1 — Validation UI (test_ui)", "Streamlit Bot Framework harness → COPILOT_MESSAGES_URL", 14, 12)
-    add_box(slide, Inches(0.35), Inches(2.55), Inches(12.6), Inches(1.7), TEAL_LIGHT, TEAL,
-            "Layer 2 — Cognitive Routing (copilot_agent)",
-            "Flask /api/messages · LangChain AzureChatOpenAI / offline_router · SYSTEM_PROMPT · invoice OOS hard-match before tools",
-            14, 12)
-    add_box(slide, Inches(0.35), Inches(4.4), Inches(12.6), Inches(2.3), GREEN_LIGHT, GREEN,
+    add_box(slide, Inches(0.35), Inches(1.2), Inches(12.6), Inches(1.05), BLUE_LIGHT, BLUE,
+            "Layer 1 — Validation UI (test_ui)",
+            "Streamlit chat · persona picker · Saved searches sidebar → COPILOT_MESSAGES_URL", 13, 11)
+    add_box(slide, Inches(0.35), Inches(2.35), Inches(12.6), Inches(1.25), TEAL_LIGHT, TEAL,
+            "Layer 2 — Cognitive Routing + Memory (copilot_agent + memory/)",
+            "Flask /api/messages · /api/memory/* · LangChain / offline_router · SYSTEM_PROMPT · "
+            "invoice OOS · compare hard-stop · SQLite persona store",
+            13, 11)
+    add_box(slide, Inches(0.35), Inches(3.75), Inches(12.6), Inches(1.55), GREEN_LIGHT, GREEN,
             "Layer 3 — Data Retrieval (mcp_server)",
-            "ContractRepository → FabricContractRepository (synthetic Gold today)\n"
-            "Tools: search_contracts · get_contract_profile · find_overlaps · explain_contract_risk · "
-            "compare_contracts · check_missing_contract_fields · get_expiring_contracts · get_vendor_spend_summary · search_cloud_blob_contracts",
-            14, 11)
+            "ContractRepository → analytics / risk helpers\n"
+            "Tools: search · profile · compare (N-way) · missing-fields · expiring · spend rollup · "
+            "overlaps · risk · blob search · health",
+            13, 11)
+    add_box(slide, Inches(0.35), Inches(5.45), Inches(12.6), Inches(1.15), GOLD_LIGHT, GOLD,
+            "Layer 4 — Synthetic Gold (LinkSquares fixtures)",
+            "LinSquare_Contracts_100_Updated_30bb.json + agreement_9a06.json · future live Fabric / LinkSquares",
+            13, 11)
     add_footer(slide, "Slide 3")
 
 
@@ -175,30 +181,71 @@ def slide_request_flow(prs: Presentation) -> None:
     add_title_bar(slide, "3. End-to-End Request Process Flow", "Deterministic offline path used for demo reliability")
     steps = [
         ("1. User prompt", "Streamlit chat", BLUE_LIGHT, BLUE, 0.35),
-        ("2. Invoice OOS?", "Hard refuse if invoice/AP", RED_LIGHT, RED, 2.9),
-        ("3. Route intent", "offline_router / LLM tools", TEAL_LIGHT, TEAL, 5.45),
+        ("2. Guardrails", "OOS / hard-stop / memory", RED_LIGHT, RED, 2.9),
+        ("3. Route intent", "offline_router / LLM", TEAL_LIGHT, TEAL, 5.45),
         ("4. MCP tools", "ContractRepository", GREEN_LIGHT, GREEN, 8.0),
-        ("5. Markdown reply", "Grounded sections", ORANGE_LIGHT, ORANGE, 10.55),
+        ("5. Reply + save", "Markdown · auto-save", ORANGE_LIGHT, ORANGE, 10.55),
     ]
     for title, sub, fill, line, x in steps:
-        add_box(slide, Inches(x), Inches(1.7), Inches(2.35), Inches(1.4), fill, line, title, sub, 13, 11)
+        add_box(slide, Inches(x), Inches(1.55), Inches(2.35), Inches(1.25), fill, line, title, sub, 12, 10)
     for x in (2.55, 5.1, 7.65, 10.2):
-        add_arrow_right(slide, Inches(x), Inches(2.3), color=GRAY)
+        add_arrow_right(slide, Inches(x), Inches(2.05), color=GRAY)
 
     add_box(
-        slide, Inches(0.4), Inches(3.5), Inches(12.5), Inches(3.1), LIGHT, GRAY,
-        "Intent → primary tool",
+        slide, Inches(0.4), Inches(3.05), Inches(12.5), Inches(3.55), LIGHT, GRAY,
+        "Intent → primary tool / outcome",
         "Show contracts for vendor → search_contracts\n"
         "Details for CON-0002 → get_contract_profile\n"
         "Overlapping contracts → find_overlaps\n"
         "Unusual payment / high rates → explain_contract_risk\n"
-        "Compare CON-0001 vs CON-0002 → compare_contracts\n"
+        "Compare CON-0001 vs CON-0002 → compare_contracts (N-way any IDs)\n"
+        "Compare unknown vendor/ID → hard-stop message only (no table / no recommendation)\n"
         "Need action next 90 days → get_expiring_contracts\n"
-        "Missing renewal info → check_missing_contract_fields\n"
+        "Previous / saved searches → persona memory recall (/api/memory/*)\n"
         "Invoice spend also? → exact OOS refusal (no tools)",
-        14, 12,
+        13, 11,
     )
     add_footer(slide, "Slide 4")
+
+
+def slide_hardstop_memory(prs: Presentation) -> None:
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    add_title_bar(
+        slide,
+        "3b. Compare Hard-Stop & Persona Memory",
+        "Deterministic offline paths — no LLM default pairs, no invented history",
+    )
+    add_box(
+        slide, Inches(0.4), Inches(1.35), Inches(6.2), Inches(5.3), RED_LIGHT, RED,
+        "Compare hard-stop",
+        "If any requested supplier or contract ID\n"
+        "cannot be resolved:\n\n"
+        "Return ONLY:\n"
+        "“The contract information requested\n"
+        "for the comparison is not available\n"
+        "at the moment”\n\n"
+        "• No comparative table\n"
+        "• No ## Recommendation\n"
+        "• No CON-0001 vs CON-0002 default\n"
+        "• Compare intents → offline_router",
+        15, 12,
+    )
+    add_box(
+        slide, Inches(6.9), Inches(1.35), Inches(6.0), Inches(5.3), TEAL_LIGHT, TEAL,
+        "Persona memory",
+        "SQLite: data/persona_memory.sqlite\n"
+        "(override VAL_MEMORY_DB)\n\n"
+        "• Auto-save search-like queries\n"
+        "• Pin / filter / delete in sidebar\n"
+        "• GET/POST /api/memory/searches\n"
+        "• GET /api/memory/recall\n"
+        "• Memory-recall → offline store\n"
+        "• Streamlit owns writes when\n"
+        "  clientPersistsMemory is set\n\n"
+        "memory/store.py + test_ui sidebar",
+        15, 12,
+    )
+    add_footer(slide, "Slide 5")
 
 
 def slide_repository(prs: Presentation) -> None:
@@ -210,12 +257,12 @@ def slide_repository(prs: Presentation) -> None:
             16, 14)
     add_arrow_right(slide, Inches(4.7), Inches(3.7), Inches(0.5), Inches(0.28), GRAY)
     add_box(slide, Inches(5.4), Inches(1.4), Inches(3.6), Inches(2.3), GREEN_LIGHT, GREEN,
-            "Today", "FabricContractRepository\n→ Gold_Vendor_Contracts\n→ offline fixtures", 15, 13)
+            "Today", "FabricContractRepository\n→ LinkSquares fixtures\n→ Gold-shaped projections", 15, 13)
     add_box(slide, Inches(5.4), Inches(4.0), Inches(3.6), Inches(2.6), PURPLE_LIGHT, PURPLE,
-            "Later", "LinkSquares / CLM adapter\nsame tool signatures\nsame snake_case projections", 15, 13)
+            "Later", "Live LinkSquares / CLM\nsame tool signatures\nsame snake_case projections", 15, 13)
     add_box(slide, Inches(9.3), Inches(1.4), Inches(3.5), Inches(5.2), GOLD_LIGHT, GOLD,
             "Consumers", "search_contracts\nget_contract_profile\nfind_overlaps\nexplain_contract_risk\ncompare / missing / expiring", 15, 12)
-    add_footer(slide, "Slide 5")
+    add_footer(slide, "Slide 6")
 
 
 def slide_new_tools(prs: Presentation) -> None:
@@ -224,14 +271,14 @@ def slide_new_tools(prs: Presentation) -> None:
     tools = [
         ("search_contracts", "Vendor/BU/status/type filters\nStable snake_case catalog rows", GREEN_LIGHT, GREEN, 0.4, 1.3),
         ("get_contract_profile", "One contract_id profile\n+ missing_fields", TEAL_LIGHT, TEAL, 4.6, 1.3),
-        ("find_overlaps", "Same-vendor date overlaps\ncontract_a/b + window + why", ORANGE_LIGHT, ORANGE, 8.8, 1.3),
+        ("compare_contracts", "Pairwise / N-way any IDs\nHard-stop if unresolved", ORANGE_LIGHT, ORANGE, 8.8, 1.3),
         ("explain_contract_risk", "known_facts vs computed_risks\nmissing_data + review action", PURPLE_LIGHT, PURPLE, 0.4, 4.0),
-        ("Invoice OOS guardrail", "Exact refusal before tools\nNever treat ACV as invoices", RED_LIGHT, RED, 4.6, 4.0),
+        ("find_overlaps", "Same-vendor date overlaps\nOverlapFlag-aware pairs", BLUE_LIGHT, BLUE, 4.6, 4.0),
         ("Demo fixtures", "LinkSquares 100 contracts\nMicrosoft/AWS overlaps & Net 180", GOLD_LIGHT, GOLD, 8.8, 4.0),
     ]
     for title, sub, fill, line, x, y in tools:
         add_box(slide, Inches(x), Inches(y), Inches(3.9), Inches(2.3), fill, line, title, sub, 14, 12)
-    add_footer(slide, "Slide 6")
+    add_footer(slide, "Slide 7")
 
 
 def slide_risk_flow(prs: Presentation) -> None:
@@ -249,7 +296,7 @@ def slide_risk_flow(prs: Presentation) -> None:
             "Response sections",
             "known_facts\ncomputed_risks\nmissing_data\nrecommended_review_action\nsource\n\nNever invent unsupported risks",
             15, 12)
-    add_footer(slide, "Slide 7")
+    add_footer(slide, "Slide 8")
 
 
 def slide_tool_inventory(prs: Presentation) -> None:
@@ -260,7 +307,7 @@ def slide_tool_inventory(prs: Presentation) -> None:
         "get_contract_profile",
         "find_overlaps",
         "explain_contract_risk",
-        "compare_contracts",
+        "compare_contracts (N-way; hard-stop)",
     ]
     right = [
         "check_missing_contract_fields",
@@ -273,7 +320,7 @@ def slide_tool_inventory(prs: Presentation) -> None:
             "Structured / analytics", "\n".join(left), 15, 13)
     add_box(slide, Inches(6.9), Inches(1.4), Inches(5.9), Inches(4.8), BLUE_LIGHT, BLUE,
             "Commercial / docs / health", "\n".join(right), 15, 13)
-    add_footer(slide, "Slide 8")
+    add_footer(slide, "Slide 9")
 
 
 def slide_foundry_future(prs: Presentation) -> None:
@@ -287,8 +334,8 @@ def slide_foundry_future(prs: Presentation) -> None:
         ("Root .env", "AZURE_FOUNDRY_\nCONNECTION_STRING", TEAL_LIGHT, TEAL, 0.4),
         ("Entra auth", "DefaultAzureCredential", ORANGE_LIGHT, ORANGE, 3.0),
         ("Wrap tools", "FunctionTool ToolSet\n(7 MCP tools)", GREEN_LIGHT, GREEN, 5.6),
-        ("create_agent", "SYSTEM_PROMPT\n+ OOS guardrail", BLUE_LIGHT, BLUE, 8.2),
-        ("Future host", "Teams / Foundry UI\nsame tool contracts", PURPLE_LIGHT, PURPLE, 10.8),
+        ("create_agent", "SYSTEM_PROMPT\nhard-stop + OOS", BLUE_LIGHT, BLUE, 8.2),
+        ("Future host", "Teams / Foundry UI\nextend ToolSet", PURPLE_LIGHT, PURPLE, 10.8),
     ]
     for title, sub, fill, line, x in steps:
         add_box(slide, Inches(x), Inches(2.0), Inches(2.3), Inches(2.2), fill, line, title, sub.replace("\n", " "), 13, 11)
@@ -296,30 +343,31 @@ def slide_foundry_future(prs: Presentation) -> None:
         add_arrow_right(slide, Inches(x), Inches(3.0), Inches(0.22), Inches(0.2), GRAY)
     add_box(
         slide, Inches(0.5), Inches(4.6), Inches(12.3), Inches(1.8), LIGHT, GRAY,
-        "Deploy script ToolSet (aligned with POC structured surface)",
+        "Deploy script ToolSet today (7 tools) — extend next to full MCP inventory",
         "search_contracts · get_contract_profile · get_expiring_contracts · get_vendor_spend_summary · "
         "find_overlaps · explain_contract_risk · search_cloud_blob_contracts\n"
-        "Current demos still use Flask + FastMCP locally; Foundry is optional hosting for the same tools.",
-        14, 12,
+        "Local FastMCP also has compare_contracts + check_missing_contract_fields. "
+        "SYSTEM_PROMPT encodes compare hard-stop + persona-memory guidance.",
+        13, 11,
     )
-    add_footer(slide, "Slide 9")
+    add_footer(slide, "Slide 10")
 
 
 def slide_summary(prs: Presentation) -> None:
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     add_title_bar(slide, "9. Demo-Ready Slice Summary", "Reliable · safe · synthetic")
     items = [
-        ("Safe", "Invoice/AP/JDE/NetSuite asks → exact OOS refusal; ACV never labeled as invoices", RED, RED_LIGHT),
-        ("Structured tools", "search / profile / overlaps / risk via ContractRepository", GREEN, GREEN_LIGHT),
-        ("Deterministic demo", "LinkSquares CON-* fixtures + docs/demo_script.md", TEAL, TEAL_LIGHT),
-        ("Replaceable data", "ContractRepository ready for LinkSquares later", PURPLE, PURPLE_LIGHT),
-        ("Foundry optional", "Current runtime is Flask+LangChain/offline router, not Foundry-first", GOLD, GOLD_LIGHT),
+        ("Safe", "Invoice OOS + compare hard-stop (exact messages; no default CON-* pair)", RED, RED_LIGHT),
+        ("Structured tools", "search / profile / N-way compare / overlaps / risk via ContractRepository", GREEN, GREEN_LIGHT),
+        ("Persona memory", "SQLite save / pin / filter / recall previous searches per persona", TEAL, TEAL_LIGHT),
+        ("LinkSquares fixtures", "CON-* offline data + docs/demo_script.md; live CLM later", PURPLE, PURPLE_LIGHT),
+        ("Foundry optional", "Flask + offline router today; Foundry ToolSet wraps 7 tools", GOLD, GOLD_LIGHT),
     ]
     for i, (title, body, color, light) in enumerate(items):
         y = 1.25 + i * 1.05
         add_box(slide, Inches(0.5), Inches(y), Inches(2.6), Inches(0.85), light, color, title, title_size=14, title_color=color)
         add_box(slide, Inches(3.3), Inches(y), Inches(9.5), Inches(0.85), WHITE, color, body, title_size=13)
-    add_footer(slide, "Slide 10")
+    add_footer(slide, "Slide 11")
 
 
 def build_pptx(path: Path) -> None:
@@ -330,6 +378,7 @@ def build_pptx(path: Path) -> None:
     slide_current_vs_future(prs)
     slide_architecture(prs)
     slide_request_flow(prs)
+    slide_hardstop_memory(prs)
     slide_repository(prs)
     slide_new_tools(prs)
     slide_risk_flow(prs)

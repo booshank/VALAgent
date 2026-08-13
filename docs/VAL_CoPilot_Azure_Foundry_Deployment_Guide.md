@@ -2,9 +2,11 @@
 
 > **Framing:** Azure AI Foundry is an **optional future host**, not the current
 > validated POC runtime. The Synthetic Contract Intelligence Tool-Layer POC runs
-> locally as **Streamlit → Flask cognitive router → FastMCP tools → synthetic Gold**
-> (`USE_OFFLINE_MOCKS=true`). Use this guide only when you intentionally want to
-> wrap the same MCP tools in a managed Foundry Agent.
+> locally as **Streamlit → Flask cognitive router → FastMCP tools → LinkSquares
+> offline fixtures** (`USE_OFFLINE_MOCKS=true`), with **SQLite persona memory**
+> (save / recall previous searches) and a **compare hard-stop** when suppliers or
+> contract IDs cannot be resolved. Use this guide only when you intentionally want
+> to wrap the MCP tool surface in a managed Foundry Agent.
 
 Step-by-step procedure to provision VAL CoPilot into Microsoft Azure AI Foundry
 using `copilot_agent/deploy_to_foundry.py`.
@@ -30,20 +32,21 @@ that hosts the same cognitive instructions and MCP tool surface used by the loca
 tool-layer POC. The deployment script authenticates with Entra ID, wraps MCP tool
 implementations in a Foundry **FunctionTool / ToolSet**, and creates the agent
 using **SYSTEM_PROMPT** (lifecycle procedures, invoice/spend OOS guardrail,
-comparative analysis → `## Recommendation`).
+compare hard-stop, persona-memory guidance, comparative analysis →
+`## Recommendation` when compare succeeds).
 
 ### Current POC vs this Foundry path
 
 | Path | Host | Data | When to use |
 | --- | --- | --- | --- |
-| **Current POC (default)** | Streamlit + Flask + FastMCP | Synthetic fixtures | Demos, local validation, CI guards |
-| **Optional Foundry** | Managed Foundry Agent + same tools | Fixtures or Fabric/Search when configured | Future Teams / Foundry hosting |
+| **Current POC (default)** | Streamlit + Flask + FastMCP + persona memory | LinkSquares offline fixtures | Demos, local validation, CI guards |
+| **Optional Foundry** | Managed Foundry Agent + ToolSet (subset today) | Fixtures or Fabric/Search when configured | Future Teams / Foundry hosting |
 
 ### What gets provisioned (by the script)
 
 - Managed agent named `val-copilot` (configurable)
 - Model deployment referenced by `AZURE_OPENAI_DEPLOYMENT_NAME` or `AZURE_FOUNDRY_MODEL_DEPLOYMENT`
-- ToolSet containing the structured contract-intelligence MCP surface:
+- ToolSet containing **7** structured contract-intelligence MCP tools (local FastMCP also exposes `compare_contracts` and `check_missing_contract_fields` — extend the ToolSet next):
   - `search_contracts`
   - `get_contract_profile`
   - `get_expiring_contracts`
@@ -51,7 +54,10 @@ comparative analysis → `## Recommendation`).
   - `find_overlaps`
   - `explain_contract_risk`
   - `search_cloud_blob_contracts`
-- Instructions = full `SYSTEM_PROMPT` from `copilot_agent/agent.py` (includes hard OOS message for invoice/spend-actuals questions)
+- Instructions = full `SYSTEM_PROMPT` from `copilot_agent/agent.py`, including:
+  - Hard OOS message for invoice/spend-actuals questions
+  - Compare hard-stop when any requested supplier/ID is unresolved (exact message only; no default `CON-0001` vs `CON-0002` pair)
+  - Persona-memory guidance (local SQLite recall remains on the Flask/Streamlit path today)
 
 ### What you must prepare first (on Azure)
 
@@ -355,18 +361,23 @@ The Foundry-managed agent stores **instructions + tool definitions**. Function t
 **implementations** are the Python MCP functions from this repo and run in the
 process that handles tool calls.
 
-- **Preferred for this POC:** `USE_OFFLINE_MOCKS=true` against `mcp_server/LinSquare_Contracts_100_Updated_30bb.json` + `agreement_9a06.json`
+- **Preferred for this POC:** `USE_OFFLINE_MOCKS=true` against `mcp_server/LinSquare_Contracts_100_Updated_30bb.json` + `agreement_9a06.json` (via `linksquares_fixtures.py`)
 - **Optional live backends:** Fabric SQL (ODBC Driver 18 + ActiveDirectoryDefault) and Azure AI Search
 - **Hard OOS:** invoice/spend-actuals questions must return the exact POC OOS string and must not call spend tools as if they were invoice APIs
+- **Compare hard-stop:** if any compare side is unresolved, return only: `The contract information requested for the comparison is not available at the moment` (no table, no recommendation)
+- **Persona memory:** local POC uses `memory/store.py` + Flask `/api/memory/*` + Streamlit Saved searches; not provisioned by the Foundry script
 - Architecture / process flow: `docs/VAL_CoPilot_Architecture_and_Process_Flow.pdf` (and `.pptx`)
+- POC change log / scripts: `docs/VAL_CoPilot_POC_Changes_and_Scripts.md`
 
 ### Cognitive procedures encoded in SYSTEM_PROMPT
 
-- Comparative Analysis & Decision Framework → `## Recommendation`
+- Comparative Analysis & Decision Framework → `## Recommendation` (**only** when `compare_contracts` succeeds)
+- Compare hard-stop → exact unavailable message only (no default pair)
 - Red-Flag Compliance Audits → `## Red-Flag Compliance Audit`
 - Dynamic Counter-Clause Drafting → `## Dynamic Counter-Clause Drafting`
 - Financial Exposure Projections → `## Financial Exposure Projection`
 - Proactive Renewal Strategy Sheets → `## Proactive Renewal Strategy Sheet`
+- Persona memory recall guidance (served by local Flask/SQLite path today)
 - Invoice / spend-actuals → hard OOS (separate data-linkage POC)
 
 ---

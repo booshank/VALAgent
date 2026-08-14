@@ -132,6 +132,7 @@ from contract_analytics import (  # noqa: E402
     compare_contract_rows,
     compare_many_contract_rows,
     filter_contracts,
+    list_contract_renewals,
     normalize_contract_profile,
     normalize_contract_search_row,
     resolve_contract,
@@ -307,6 +308,63 @@ def get_expiring_contracts(
     if criteria:
         rows = filter_contracts(rows, criteria)
     payload = _rows_payload(rows, criteria=criteria)
+    return json.dumps(payload, default=str)
+
+
+@mcp.tool()
+def get_contract_renewals(
+    days_ahead: int = 90,
+    window_start: str | None = None,
+    window_end: str | None = None,
+    max_rows: int = 200,
+    contract_ref: str | None = None,
+    supplier_name: str | None = None,
+    contract_name: str | None = None,
+    contract_type: str | None = None,
+    annual_cost: float | None = None,
+) -> str:
+    """
+    Renewal Window List procedure — contracts coming up for renewal in a window.
+
+    Prefer RenewalDate; when blank, fall back to ExpirationDate as the renewal
+    action date. Pass either ``days_ahead`` (from today) or an explicit inclusive
+    ``window_start`` / ``window_end`` (ISO dates, e.g. 2026-09-01).
+
+    Args:
+        days_ahead: Lookahead days from today when explicit window dates omitted
+            (default 90).
+        window_start: Optional inclusive window start (YYYY-MM-DD).
+        window_end: Optional inclusive window end (YYYY-MM-DD).
+        max_rows: Maximum renewals to return (default 200).
+        contract_ref: Optional ContractID or ContractNumber filter.
+        supplier_name: Optional supplier name filter.
+        contract_name: Optional contract name filter.
+        contract_type: Optional contract type filter.
+        annual_cost: Optional annual contract value filter.
+
+    Returns:
+        JSON string with window bounds, criteria, and renewal rows sorted by
+        RenewalActionDate.
+    """
+    criteria = build_criteria(
+        contract_ref=contract_ref,
+        supplier_name=supplier_name,
+        contract_name=contract_name,
+        contract_type=contract_type,
+        annual_cost=annual_cost,
+    )
+    # Pull a wide catalog slice then filter in Python so offline fixtures and
+    # live Fabric share the same window semantics.
+    fetch_limit = max(int(max_rows) * 5, 500)
+    rows = _load_vendor_contracts(max_rows=fetch_limit)
+    payload = list_contract_renewals(
+        rows,
+        days_ahead=days_ahead,
+        window_start=window_start,
+        window_end=window_end,
+        max_rows=max_rows,
+        criteria=criteria or None,
+    )
     return json.dumps(payload, default=str)
 
 

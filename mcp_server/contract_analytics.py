@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import date, datetime, timedelta
 from typing import Any
 
 # Fields treated as mandatory for a usable commercial contract record.
@@ -543,5 +544,124 @@ def normalize_contract_profile(row: dict[str, Any]) -> dict[str, Any]:
         "rate_card_on_file": _rate_card_on_file(row),
         "supplier_risk_rating": row.get("SupplierRiskRating"),
         "missing_fields": missing,
+        "source": "synthetic_gold_contracts",
+    }
+
+
+def parse_iso_date(value: Any) -> date | None:
+    """Parse common ISO / datetime strings into a date (date-only)."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")[:19]).date()
+    except ValueError:
+        try:
+            return datetime.strptime(text[:10], "%Y-%m-%d").date()
+        except ValueError:
+            return None
+
+
+def resolve_renewal_window(
+    *,
+    days_ahead: int | None = 90,
+    window_start: str | date | None = None,
+    window_end: str | date | None = None,
+    today: date | None = None,
+) -> tuple[date, date]:
+    """
+    Resolve an inclusive renewal window.
+
+    Explicit ``window_start`` / ``window_end`` win when provided; otherwise the
+    window is ``[today, today + days_ahead]`` (default 90 days).
+    """
+    anchor = today or date.today()
+    start = parse_iso_date(window_start)
+    end = parse_iso_date(window_end)
+    if start is None and end is None:
+        ahead = max(0, int(days_ahead if days_ahead is not None else 90))
+        return anchor, anchor + timedelta(days=ahead)
+    if start is None:
+        start = anchor
+    if end is None:
+        ahead = max(0, int(days_ahead if days_ahead is not None else 90))
+        end = start + timedelta(days=ahead)
+    if end < start:
+        start, end = end, start
+    return start, end
+
+
+def renewal_action_date(row: dict[str, Any]) -> date | None:
+    """Prefer RenewalDate; fall back to ExpirationDate for renewal action planning."""
+    return parse_iso_date(row.get("RenewalDate")) or parse_iso_date(row.get("ExpirationDate"))
+
+
+def filter_renewals_in_window(
+    rows: list[dict[str, Any]],
+    *,
+    window_start: date,
+    window_end: date,
+) -> list[dict[str, Any]]:
+    """Return contracts whose renewal action date falls inside [start, end] inclusive."""
+    matched: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        action_date = renewal_action_date(row)
+        if action_date is None:
+            continue
+        if window_start <= action_date <= window_end:
+            enriched = dict(row)
+            enriched["RenewalActionDate"] = action_date.isoformat()
+            matched.append(enriched)
+    matched.sort(key=lambda r: str(r.get("RenewalActionDate") or ""))
+    return matched
+
+
+def list_contract_renewals(
+    rows: list[dict[str, Any]],
+    *,
+    days_ahead: int | None = 90,
+    window_start: str | date | None = None,
+    window_end: str | date | None = None,
+    today: date | None = None,
+    max_rows: int = 200,
+    criteria: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a renewals-list payload for a particular calendar window."""
+    start, end = resolve_renewal_window(
+        days_ahead=days_ahead,
+        window_start=window_start,
+        window_end=window_end,
+        today=today,
+    )
+    filtered = list(rows)
+    if criteria:
+        filtered = filter_contracts(filtered, criteria)
+    renewals = filter_renewals_in_window(
+        filtered,
+        window_start=start,
+        window_end=end,
+    )
+    capped = renewals[: max(1, int(max_rows))]
+    return {
+        "tool": "get_contract_renewals",
+        "procedure": "renewal_window_list",
+        "window": {
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "days_ahead": (end - start).days,
+        },
+        "criteria": criteria or {},
+        "columns": list(capped[0].keys()) if capped else [],
+        "row_count": len(capped),
+        "truncated": len(renewals) > len(capped),
+        "rows": capped,
         "source": "synthetic_gold_contracts",
     }

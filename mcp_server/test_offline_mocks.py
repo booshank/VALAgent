@@ -32,6 +32,11 @@ expiring = json.loads(server.get_expiring_contracts(days_ahead=3650, max_rows=50
 assert expiring["row_count"] > 0, expiring
 assert "ContractID" in expiring["columns"]
 
+renewals = json.loads(server.get_contract_renewals(days_ahead=365, max_rows=50))
+assert renewals["row_count"] > 0, renewals
+assert renewals["procedure"] == "renewal_window_list"
+assert renewals["window"]["start"] and renewals["window"]["end"]
+
 spend = json.loads(server.get_vendor_spend_summary(max_rows=50))
 assert spend["row_count"] > 0, spend
 assert "SupplierName" in spend["columns"]
@@ -121,6 +126,7 @@ assert "unusual_payment_terms" in codes, codes
 
 print("offline interceptor OK")
 print(f"  expiring_rows={expiring['row_count']}")
+print(f"  renewal_rows={renewals['row_count']} window={renewals['window']}")
 print(f"  spend_rows={spend['row_count']}")
 print(f"  search_docs={search['count']}")
 print(f"  compare_diffs={compared['difference_count']}")
@@ -148,6 +154,7 @@ def test_production_tools_have_no_mock_branches() -> None:
     # Tool bodies must not branch on USE_OFFLINE_MOCKS.
     tool_markers = [
         "def get_expiring_contracts",
+        "def get_contract_renewals",
         "def get_vendor_spend_summary",
         "def compare_contracts",
         "def check_missing_contract_fields",

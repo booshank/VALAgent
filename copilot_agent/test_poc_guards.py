@@ -483,6 +483,83 @@ print("repository_ok", len(all_rows), one["ContractID"], len(vendor_rows))
     print("ContractRepository OK", out)
 
 
+def test_contract_renewals_window_procedure() -> None:
+    out = _run_mcp_snippet(
+        r"""
+import json
+from datetime import date
+from contract_analytics import list_contract_renewals, resolve_renewal_window
+import server
+
+start, end = resolve_renewal_window(days_ahead=90, today=date(2026, 8, 14))
+assert start.isoformat() == "2026-08-14"
+assert end.isoformat() == "2026-11-12"
+
+payload = json.loads(
+    server.get_contract_renewals(
+        days_ahead=90,
+        max_rows=50,
+    )
+)
+assert payload["procedure"] == "renewal_window_list", payload
+assert payload["tool"] == "get_contract_renewals", payload
+assert payload["row_count"] > 0, payload
+assert "window" in payload and payload["window"]["start"] and payload["window"]["end"]
+for row in payload["rows"]:
+    assert row.get("RenewalActionDate"), row
+    assert row.get("ContractID") or row.get("contract_id")
+
+# Explicit ISO window should constrain results.
+narrow = json.loads(
+    server.get_contract_renewals(
+        window_start="2026-08-14",
+        window_end="2026-08-31",
+        max_rows=50,
+    )
+)
+assert narrow["window"]["start"] == "2026-08-14"
+assert narrow["window"]["end"] == "2026-08-31"
+assert narrow["row_count"] >= 1
+assert narrow["row_count"] <= payload["row_count"]
+
+msft = json.loads(
+    server.get_contract_renewals(
+        days_ahead=365,
+        supplier_name="Microsoft",
+        max_rows=50,
+    )
+)
+assert msft["row_count"] >= 1
+assert all(
+    "microsoft" in str(r.get("SupplierName") or "").lower()
+    for r in msft["rows"]
+), msft
+print(json.dumps({
+    "days90": payload["row_count"],
+    "aug_window": narrow["row_count"],
+    "microsoft": msft["row_count"],
+}))
+"""
+    )
+    print("get_contract_renewals OK", out)
+
+
+def test_offline_router_renewal_window_routing() -> None:
+    from offline_router import _choose_tools, _parse_renewal_window_kwargs
+
+    assert "get_contract_renewals" in _choose_tools(
+        "List contract renewals in the next 60 days"
+    )
+    assert "get_contract_renewals" in _choose_tools(
+        "Show the renewals list for the renewal window 2026-09-01 to 2026-09-30"
+    )
+    assert _parse_renewal_window_kwargs("renewals in the next 60 days")["days_ahead"] == 60
+    assert _parse_renewal_window_kwargs("within 3 months")["days_ahead"] == 90
+    iso = _parse_renewal_window_kwargs("renewal window 2026-09-01 to 2026-09-30")
+    assert iso == {"window_start": "2026-09-01", "window_end": "2026-09-30"}
+    print("renewal window routing OK")
+
+
 if __name__ == "__main__":
     test_invoice_guardrail_hard_match()
     test_search_contracts_microsoft()
@@ -496,4 +573,6 @@ if __name__ == "__main__":
     test_find_overlaps_tool_and_routing()
     test_explain_contract_risk_tool_and_routing()
     test_contract_repository_abstraction()
+    test_contract_renewals_window_procedure()
+    test_offline_router_renewal_window_routing()
     print("all POC guard checks passed")

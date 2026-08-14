@@ -91,3 +91,9 @@ Persona Memory,DELETE /api/memory/conversations,copilot_agent/app.py,API Route,D
 Persona Memory,delete_conversation,memory/store.py,Function,Removes a conversation and cascading messages/searches; optional persona ownership check
 Persona Memory,delete_all_conversations,memory/store.py,Function,Deletes every conversation for a persona and returns the count removed
 Validation UI,_delete_conversation,test_ui/app.py,Function,Streamlit helper to delete a saved chat from persona memory and start fresh if it was active
+MCP Tools,get_contract_renewals,mcp_server/server.py,MCP Tool,Renewal Window List — contracts coming up for renewal in days_ahead or window_start/window_end
+MCP Tools,list_contract_renewals,mcp_server/contract_analytics.py,Function,Filters catalog rows into an inclusive renewal window and builds the renewals-list payload
+MCP Tools,filter_renewals_in_window,mcp_server/contract_analytics.py,Function,"Keeps contracts whose RenewalActionDate falls inside [start, end]"
+MCP Tools,resolve_renewal_window,mcp_server/contract_analytics.py,Function,Resolves days_ahead or explicit ISO bounds into an inclusive date window
+Cognitive Router,_parse_renewal_window_kwargs,copilot_agent/offline_router.py,Function,Parses next N days/months or ISO date ranges from renewal/expiry user text
+Cognitive Router,RENEWAL WINDOW LIST procedure,copilot_agent/agent.py,Constant,SYSTEM_PROMPT procedure for renewals list in a particular window via get_contract_renewals

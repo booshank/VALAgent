@@ -145,6 +145,18 @@ def _switch_conversation(conversation_id: str) -> None:
     st.session_state.messages = _load_messages(conversation_id)
 
 
+def _delete_conversation(conversation_id: str) -> bool:
+    """Remove a saved conversation from persona memory; start fresh if it was active."""
+    store = get_memory_store()
+    deleted = store.delete_conversation(
+        conversation_id,
+        persona_id=st.session_state.persona_id,
+    )
+    if deleted and conversation_id == st.session_state.conversation_id:
+        _start_new_conversation()
+    return deleted
+
+
 def _persist_turn(role: str, content: str, meta: dict | None = None) -> None:
     store = get_memory_store()
     store.append_message(
@@ -202,20 +214,49 @@ def _render_sidebar(messages_url: str) -> str:
 
     st.divider()
     st.subheader("Previous conversations")
+    st.caption("Open a prior chat, or delete it from persona memory.")
     conversations = store.list_conversations(st.session_state.persona_id, limit=25)
     if not conversations:
         st.caption("No saved conversations yet.")
+    else:
+        clear_cols = st.columns(2)
+        if clear_cols[0].button(
+            "Delete current chat",
+            use_container_width=True,
+            help="Remove the active conversation from memory and start a new one.",
+            key="delete-current-conversation",
+        ):
+            _delete_conversation(st.session_state.conversation_id)
+            st.rerun()
+        if clear_cols[1].button(
+            "Delete all chats",
+            use_container_width=True,
+            help="Remove every saved conversation for this persona.",
+            key="delete-all-conversations",
+        ):
+            store.delete_all_conversations(st.session_state.persona_id)
+            _start_new_conversation()
+            st.rerun()
     for conv in conversations:
         title = conv.get("title") or "(untitled)"
-        label = f"{title[:48]} · {conv.get('message_count', 0)} msgs"
+        label = f"{title[:40]} · {conv.get('message_count', 0)} msgs"
         selected = conv["id"] == st.session_state.conversation_id
-        if st.button(
+        row = st.columns([4, 1])
+        if row[0].button(
             ("● " if selected else "○ ") + label,
             key=f"conv-{conv['id']}",
             use_container_width=True,
             disabled=selected,
         ):
             _switch_conversation(conv["id"])
+            st.rerun()
+        if row[1].button(
+            "Del",
+            key=f"del-conv-{conv['id']}",
+            use_container_width=True,
+            help="Delete this conversation from memory",
+        ):
+            _delete_conversation(str(conv["id"]))
             st.rerun()
 
     st.divider()

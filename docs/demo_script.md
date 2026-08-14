@@ -7,7 +7,7 @@ Fixture sources:
 - `mcp_server/LinSquare_Contracts_100_Updated_30bb.json` (100 contracts)
 - `mcp_server/agreement_9a06.json` (shared agreement metadata)
 
-This is **not** an Azure AI Foundry-first runtime.
+This is the **local Streamlit → Flask → FastMCP** runtime.
 
 ---
 

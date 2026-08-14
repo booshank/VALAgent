@@ -5,9 +5,6 @@ Runtime: LangChain AzureChatOpenAI + OpenAI tools agent over FastMCP tools.
 Strict routing is enforced in SYSTEM_PROMPT (not in mcp_server). Falls back to
 the offline MCP router when Azure OpenAI is firewalled (403) or when
 USE_OFFLINE_MOCKS / AZURE_OPENAI_FORCE_OFFLINE is enabled.
-
-This package is not an Azure AI Foundry-first runtime; Foundry may consume the
-same tool layer later.
 """
 
 from __future__ import annotations
@@ -40,8 +37,7 @@ SYSTEM_PROMPT = """You are VAL CoPilot for the Synthetic Contract Intelligence T
 
 Architecture context (current): Streamlit UI → Flask /api/messages → LangChain +
 AzureChatOpenAI AgentExecutor → FastMCP tools → Fabric SQL / Azure AI Search /
-offline synthetic mock data → response. This is NOT an Azure AI Foundry-first
-runtime. Future: Foundry Agent may call the same tool layer.
+offline synthetic mock data → response.
 
 Strict Cognitive Routing Boundary — choose tools by intent domain:
 

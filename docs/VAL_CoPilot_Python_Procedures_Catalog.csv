@@ -74,10 +74,6 @@ Validation UI,_render_sidebar,test_ui/app.py,Function,Sidebar for personas conve
 Validation UI,_persist_turn / _switch_conversation,test_ui/app.py,Function,Client-owned persona memory persistence and conversation switching
 Validation UI,mock_messages_server.py,test_ui/mock_messages_server.py,Entry point,Local echo /api/messages backend for UI testing without the real agent
 Validation UI,config.get,test_ui/config.py,Function,Loads COPILOT_MESSAGES_URL and related env from repo-root .env
-Deploy,deploy_to_foundry.py,copilot_agent/deploy_to_foundry.py,Entry point,Optional CLI to provision Azure AI Foundry managed agent (--dry-run supported)
-Deploy,deploy_agent,copilot_agent/deploy_to_foundry.py,Function,Creates Foundry agent with SYSTEM_PROMPT and ToolSet from MCP tools
-Deploy,load_fabric_tools,copilot_agent/deploy_to_foundry.py,Function,Imports MCP tool callables from mcp_server for Foundry wrapping
-Deploy,build_toolset,copilot_agent/deploy_to_foundry.py,Function,Wraps fabric tool callables into an Azure AI Foundry ToolSet
 Tests,test_offline_mocks.py,mcp_server/test_offline_mocks.py,Test Entry,Offline interceptor roundtrip; asserts tool bodies have no mock branches
 Tests,test_poc_guards.py,copilot_agent/test_poc_guards.py,Test Entry,POC guards for invoice OOS N-way compare hard-stop overlaps risk repository persona recall
 Tests,test_invoice_guardrail_hard_match,copilot_agent/test_poc_guards.py,Test,Asserts invoice/actual-spend intents are refused without tool calls
@@ -90,4 +86,8 @@ Tests,test_bot_schema.py,test_ui/test_bot_schema.py,Test Entry,Bot Framework moc
 Tests,test_streamlit_ui.py,test_ui/test_streamlit_ui.py,Test Entry,Streamlit AppTest chat roundtrip against mock /api/messages
 Generators,generate_architecture_diagram.py,docs/generate_architecture_diagram.py,Entry point,ReportLab generator for VAL_CoPilot_Architecture_and_Process_Flow.pdf
 Generators,generate_architecture_pptx.py,docs/generate_architecture_pptx.py,Entry point,PowerPoint generator for architecture/process-flow deck
-Generators,generate_foundry_guide.py,docs/generate_foundry_guide.py,Entry point,Renders Foundry deployment guide Markdown into PDF and HTML
+Persona Memory,DELETE /api/memory/conversations/<id>,copilot_agent/app.py,API Route,Deletes one prior conversation (messages + linked searches) for a persona
+Persona Memory,DELETE /api/memory/conversations,copilot_agent/app.py,API Route,Deletes all prior conversations for a persona
+Persona Memory,delete_conversation,memory/store.py,Function,Removes a conversation and cascading messages/searches; optional persona ownership check
+Persona Memory,delete_all_conversations,memory/store.py,Function,Deletes every conversation for a persona and returns the count removed
+Validation UI,_delete_conversation,test_ui/app.py,Function,Streamlit helper to delete a saved chat from persona memory and start fresh if it was active

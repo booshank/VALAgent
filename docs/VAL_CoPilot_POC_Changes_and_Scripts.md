@@ -48,6 +48,7 @@ Streamlit (test_ui/app.py)
 - Shared SQLite store at `data/persona_memory.sqlite` (override with `VAL_MEMORY_DB`).
 - **Auto-save** of search-like user queries per persona.
 - Streamlit sidebar **Saved searches**: filter, pin (**Save last search**), Re-run, Open chat, Delete, Retrieve in chat.
+- Streamlit sidebar **Previous conversations**: open, **Delete** (per chat), **Delete current chat**, **Delete all chats**.
 - Chat recall phrases: “Show my previous searches”, “Retrieve my saved searches”, “previous searches about {topic}”.
 - HTTP APIs on the cognitive agent:
   - `GET /api/memory/searches?persona_id=…&q=…&saved_only=true`
@@ -55,6 +56,8 @@ Streamlit (test_ui/app.py)
   - `DELETE /api/memory/searches/<id>?persona_id=…`
   - `GET /api/memory/recall?persona_id=…&q=…`
   - `GET /api/memory/conversations?persona_id=…`
+  - `DELETE /api/memory/conversations/<id>?persona_id=…`
+  - `DELETE /api/memory/conversations?persona_id=…` (delete all for persona)
 - Streamlit sets `channelData.clientPersistsMemory=true` so Flask does not double-write; Flask persists for other clients.
 - Memory-recall intents are forced through the deterministic offline persona store.
 
@@ -99,10 +102,10 @@ Streamlit (test_ui/app.py)
 - `USE_OFFLINE_MOCKS=true` installs a LinkSquares interceptor (patches `pyodbc` / `pandas.read_sql` / Azure Search client) while keeping tool bodies production-shaped.
 - `AZURE_OPENAI_FORCE_OFFLINE=true` or Azure OpenAI **403 VNet/firewall** → offline cognitive router (`offline_router.py`) still calling the same MCP tools.
 
-### 2.6 Docs & optional Foundry path
+### 2.6 Docs
 
 - Architecture / process-flow PDF + PPTX generators.
-- Azure AI Foundry deployment guide (MD → PDF/HTML) and optional `deploy_to_foundry.py` (Foundry is **not** the primary runtime).
+- POC changes and Python scripts reference.
 
 ---
 
@@ -157,7 +160,6 @@ Legend: **R** = runtime · **G** = generator · **T** = test · **C** = config/s
 | `copilot_agent/agent.py` | **R** | LangChain `create_openai_tools_agent` + `AgentExecutor`, system prompt routing domains, offline/403 fallback. Forces offline for compare + memory-recall intents. `run_turn()`. |
 | `copilot_agent/offline_router.py` | **R** | Deterministic intent → tool router used when Azure OpenAI is bypassed/firewalled. Compare hard-stop, summarizers, lifecycle sections, persona memory recall. `run_offline_turn()`. |
 | `copilot_agent/mcp_clients.py` | **R** | Dual stdio MCP bridge: local `../mcp_server/server.py` + optional `uvx mcp-server-pgvector`. |
-| `copilot_agent/deploy_to_foundry.py` | **R** (optional) | Provisions an Azure AI Foundry managed agent wrapping MCP tools as a ToolSet. `deploy_agent()`, `--dry-run`. |
 | `copilot_agent/config.py` | **C** | Root `.env` loader. |
 | `copilot_agent/test_poc_guards.py` | **T** | POC guards: invoice OOS, N-way compare, missing-contract hard-stop, overlaps/risk, repository, persona recall. |
 | `copilot_agent/__init__.py` | **C** | Package marker. |
@@ -166,7 +168,7 @@ Legend: **R** = runtime · **G** = generator · **T** = test · **C** = config/s
 
 | Script | Kind | Description |
 | --- | --- | --- |
-| `test_ui/app.py` | **R** | Streamlit chat UI. Builds Bot Framework-style activities, posts to Flask, persists persona conversations/searches via `memory/`. Sidebar for Saved searches. |
+| `test_ui/app.py` | **R** | Streamlit chat UI. Builds Bot Framework-style activities, posts to Flask, persists persona conversations/searches via `memory/`. Sidebar for Saved searches and delete prior conversations. |
 | `test_ui/mock_messages_server.py` | **R** (local) | Echo `/api/messages` backend for UI testing without the real agent. Port `MOCK_MESSAGES_PORT` (default 3978). |
 | `test_ui/config.py` | **C** | Root `.env` loader. |
 | `test_ui/test_bot_schema.py` | **T** | Bot Framework mock activity schema smoke test. |
@@ -187,13 +189,13 @@ Legend: **R** = runtime · **G** = generator · **T** = test · **C** = config/s
 | --- | --- | --- |
 | `docs/generate_architecture_diagram.py` | **G** | ReportLab architecture / process-flow PDF → `VAL_CoPilot_Architecture_and_Process_Flow.pdf`. |
 | `docs/generate_architecture_pptx.py` | **G** | PowerPoint architecture deck → `.pptx`. |
-| `docs/generate_foundry_guide.py` | **G** | Renders Foundry deployment guide PDF + HTML from Markdown. |
 
 **Related docs (non-Python):**
 
 - `docs/demo_script.md` — offline demo prompts and expected tools/outputs  
-- `docs/VAL_CoPilot_Azure_Foundry_Deployment_Guide.md` — Foundry guide source  
-- Generated artifacts: architecture PDF/PPTX, Foundry PDF/HTML  
+- `docs/VAL_CoPilot_POC_Changes_and_Scripts.md` — change log / scripts catalog  
+- Generated artifacts: architecture PDF/PPTX  
+- `docs/VAL_CoPilot_Python_Procedures_Catalog.xlsx` / `.csv` — procedure inventory
 
 ---
 
@@ -210,7 +212,6 @@ Legend: **R** = runtime · **G** = generator · **T** = test · **C** = config/s
 | `COPILOT_HOST` / `COPILOT_PORT` | Flask listen address (default `0.0.0.0:3978`) |
 | `COPILOT_MESSAGES_URL` | Streamlit → agent URL |
 | `VAL_MEMORY_DB` | Override SQLite path for persona memory |
-| `AZURE_FOUNDRY_*` | Optional Foundry deploy (`deploy_to_foundry.py`) |
 | `MOCK_MESSAGES_PORT` | Mock messages server port (`test_ui`) |
 
 Copy from `.env.example` to root `.env` only — do not duplicate under subfolders.
@@ -272,12 +273,12 @@ cd test_ui && .venv/bin/python test_streamlit_ui.py
 3. **Missing search/profile** — “No such contract is available…” with `contract_not_present`.
 4. **Invoice/actual spend** — out of scope; refuse without calling spend tools.
 5. **Successful compares** — N-way any-ID support + comparative recommendation framework applies only when tools succeed.
-6. **Persona memory** — auto-save + explicit pin/retrieve; Streamlit owns writes when `clientPersistsMemory` is set.
+6. **Persona memory** — auto-save + explicit pin/retrieve/delete conversations; Streamlit owns writes when `clientPersistsMemory` is set.
 7. **Fixtures** — LinkSquares JSON only for offline POC data.
-8. **Foundry** — optional future host; Streamlit → Flask → MCP remains the POC runtime.
+8. **Runtime** — Streamlit → Flask → MCP is the sole validated POC path (no Foundry deploy code in-repo).
 
 ---
 
 ## 9. One-liner summary
 
-VAL CoPilot is a three-layer tool-layer POC: Streamlit validation UI → Flask/LangChain (or offline) cognitive router → FastMCP Fabric/Search tools backed by LinkSquares fixtures offline. It supports N-way any-ID compares with a hard stop when suppliers/IDs are missing, structured search/profile/overlap/risk tools, and SQLite persona memory for saving and retrieving previous searches.
+VAL CoPilot is a three-layer tool-layer POC: Streamlit validation UI → Flask/LangChain (or offline) cognitive router → FastMCP Fabric/Search tools backed by LinkSquares fixtures offline. It supports N-way any-ID compares with a hard stop when suppliers/IDs are missing, structured search/profile/overlap/risk tools, and SQLite persona memory for saving, retrieving, and deleting previous searches and conversations.

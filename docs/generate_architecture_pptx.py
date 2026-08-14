@@ -122,8 +122,8 @@ def slide_cover(prs: Presentation) -> None:
     note = slide.shapes.add_textbox(Inches(1.2), Inches(5.3), Inches(10.9), Inches(1.4))
     for i, line in enumerate([
         "Current: Streamlit → Flask /api/messages → LangChain or offline router → FastMCP → LinkSquares fixtures + persona memory",
-        "Future: Streamlit/Teams → Azure AI Foundry Agent → same MCP/API tools → live LinkSquares later",
-        "Compare hard-stop when IDs missing · Invoice/actual-spend OOS · Not Foundry-first today",
+        "Persona memory: save / pin / filter / recall / delete prior searches and conversations",
+        "Compare hard-stop when IDs missing · Invoice/actual-spend OOS",
     ]):
         para = note.text_frame.paragraphs[0] if i == 0 else note.text_frame.add_paragraph()
         para.alignment = PP_ALIGN.CENTER
@@ -132,7 +132,7 @@ def slide_cover(prs: Presentation) -> None:
 
 def slide_current_vs_future(prs: Presentation) -> None:
     slide = prs.slides.add_slide(prs.slide_layouts[6])
-    add_title_bar(slide, "1. Current vs Future Architecture", "Keep the tool layer stable; swap the cognitive host later")
+    add_title_bar(slide, "1. Runtime Architecture", "Keep the tool layer stable; swap data sources later")
     add_box(
         slide, Inches(0.4), Inches(1.4), Inches(6.1), Inches(5.2), TEAL_LIGHT, TEAL,
         "CURRENT — Tool-Layer POC",
@@ -141,8 +141,8 @@ def slide_current_vs_future(prs: Presentation) -> None:
     )
     add_box(
         slide, Inches(6.8), Inches(1.4), Inches(6.1), Inches(5.2), PURPLE_LIGHT, PURPLE,
-        "FUTURE — Foundry-hosted agent",
-        "Streamlit or Teams UI\n→ Azure AI Foundry Agent\n→ Same MCP / API tools\n→ ContractRepository\n→ Synthetic contract data now\n→ LinkSquares / CLM later\n→ Grounded answers",
+        "EVOLUTION — Data source swap",
+        "Same Streamlit / Flask host\n→ Same MCP / API tools\n→ ContractRepository\n→ Synthetic fixtures today\n→ Live Fabric SQL later\n→ Live LinkSquares / CLM later\n→ Grounded answers",
         16, 13,
     )
     add_footer(slide, "Slide 2")
@@ -236,8 +236,10 @@ def slide_hardstop_memory(prs: Presentation) -> None:
         "SQLite: data/persona_memory.sqlite\n"
         "(override VAL_MEMORY_DB)\n\n"
         "• Auto-save search-like queries\n"
-        "• Pin / filter / delete in sidebar\n"
+        "• Pin / filter / delete searches\n"
+        "• Delete prior conversations\n"
         "• GET/POST /api/memory/searches\n"
+        "• DELETE /api/memory/conversations\n"
         "• GET /api/memory/recall\n"
         "• Memory-recall → offline store\n"
         "• Streamlit owns writes when\n"
@@ -323,51 +325,21 @@ def slide_tool_inventory(prs: Presentation) -> None:
     add_footer(slide, "Slide 9")
 
 
-def slide_foundry_future(prs: Presentation) -> None:
-    slide = prs.slides.add_slide(prs.slide_layouts[6])
-    add_title_bar(
-        slide,
-        "8. Optional Future — Azure AI Foundry Deploy",
-        "deploy_to_foundry.py is optional; current POC does not require Foundry",
-    )
-    steps = [
-        ("Root .env", "AZURE_FOUNDRY_\nCONNECTION_STRING", TEAL_LIGHT, TEAL, 0.4),
-        ("Entra auth", "DefaultAzureCredential", ORANGE_LIGHT, ORANGE, 3.0),
-        ("Wrap tools", "FunctionTool ToolSet\n(7 MCP tools)", GREEN_LIGHT, GREEN, 5.6),
-        ("create_agent", "SYSTEM_PROMPT\nhard-stop + OOS", BLUE_LIGHT, BLUE, 8.2),
-        ("Future host", "Teams / Foundry UI\nextend ToolSet", PURPLE_LIGHT, PURPLE, 10.8),
-    ]
-    for title, sub, fill, line, x in steps:
-        add_box(slide, Inches(x), Inches(2.0), Inches(2.3), Inches(2.2), fill, line, title, sub.replace("\n", " "), 13, 11)
-    for x in (2.75, 5.35, 7.95, 10.55):
-        add_arrow_right(slide, Inches(x), Inches(3.0), Inches(0.22), Inches(0.2), GRAY)
-    add_box(
-        slide, Inches(0.5), Inches(4.6), Inches(12.3), Inches(1.8), LIGHT, GRAY,
-        "Deploy script ToolSet today (7 tools) — extend next to full MCP inventory",
-        "search_contracts · get_contract_profile · get_expiring_contracts · get_vendor_spend_summary · "
-        "find_overlaps · explain_contract_risk · search_cloud_blob_contracts\n"
-        "Local FastMCP also has compare_contracts + check_missing_contract_fields. "
-        "SYSTEM_PROMPT encodes compare hard-stop + persona-memory guidance.",
-        13, 11,
-    )
-    add_footer(slide, "Slide 10")
-
-
 def slide_summary(prs: Presentation) -> None:
     slide = prs.slides.add_slide(prs.slide_layouts[6])
-    add_title_bar(slide, "9. Demo-Ready Slice Summary", "Reliable · safe · synthetic")
+    add_title_bar(slide, "8. Demo-Ready Slice Summary", "Reliable · safe · synthetic")
     items = [
         ("Safe", "Invoice OOS + compare hard-stop (exact messages; no default CON-* pair)", RED, RED_LIGHT),
         ("Structured tools", "search / profile / N-way compare / overlaps / risk via ContractRepository", GREEN, GREEN_LIGHT),
-        ("Persona memory", "SQLite save / pin / filter / recall previous searches per persona", TEAL, TEAL_LIGHT),
+        ("Persona memory", "SQLite save / pin / filter / recall / delete searches and conversations", TEAL, TEAL_LIGHT),
         ("LinkSquares fixtures", "CON-* offline data + docs/demo_script.md; live CLM later", PURPLE, PURPLE_LIGHT),
-        ("Foundry optional", "Flask + offline router today; Foundry ToolSet wraps 7 tools", GOLD, GOLD_LIGHT),
+        ("Local runtime", "Streamlit → Flask → FastMCP is the sole validated POC path", GOLD, GOLD_LIGHT),
     ]
     for i, (title, body, color, light) in enumerate(items):
         y = 1.25 + i * 1.05
         add_box(slide, Inches(0.5), Inches(y), Inches(2.6), Inches(0.85), light, color, title, title_size=14, title_color=color)
         add_box(slide, Inches(3.3), Inches(y), Inches(9.5), Inches(0.85), WHITE, color, body, title_size=13)
-    add_footer(slide, "Slide 11")
+    add_footer(slide, "Slide 10")
 
 
 def build_pptx(path: Path) -> None:
@@ -383,7 +355,6 @@ def build_pptx(path: Path) -> None:
     slide_new_tools(prs)
     slide_risk_flow(prs)
     slide_tool_inventory(prs)
-    slide_foundry_future(prs)
     slide_summary(prs)
     path.parent.mkdir(parents=True, exist_ok=True)
     prs.save(str(path))

@@ -168,7 +168,7 @@ def build():
     story.append(Spacer(1, 0.35 * inch))
     story.append(Paragraph(
         "Current runtime: Streamlit → Flask Cognitive Router → FastMCP Tools → LinkSquares Fixtures<br/>"
-        "+ Persona memory · Compare hard-stop · Optional future Foundry Agent host",
+        "+ Persona memory (save / recall / delete) · Compare hard-stop",
         s["cover_sub"],
     ))
     story.append(Spacer(1, 1.6 * inch))
@@ -181,8 +181,9 @@ def build():
     story.append(Paragraph(
         "VAL CoPilot is a <b>synthetic contract intelligence tool-layer POC</b>. It proves that structured "
         "contract analytics can be exposed as MCP tools and consumed by a cognitive router that produces "
-        "deterministic lifecycle workflows. It is intentionally <b>not</b> an Azure AI Foundry-first product "
-        "demo, and it does not claim live Fabric / LinkSquares production connectivity.",
+        "deterministic lifecycle workflows. The validated runtime is "
+        "<b>Streamlit → Flask → FastMCP → LinkSquares fixtures</b>. It does not claim live Fabric / "
+        "LinkSquares production connectivity.",
         s["body"],
     ))
     story.append(Paragraph("In scope", s["h2"]))
@@ -195,14 +196,14 @@ def build():
         "Cognitive router: Azure OpenAI + LangChain tool-calling, or offline keyword router",
         "Hard OOS guardrail for invoice/spend linkage requests",
         "Compare hard-stop when suppliers/IDs are missing (no default CON-0001/CON-0002 pair)",
-        "Persona memory: save / pin / filter / retrieve previous searches (SQLite + Streamlit sidebar)",
+        "Persona memory: save / pin / filter / retrieve / <b>delete</b> previous searches and conversations",
         "Streamlit Validation UI for local demos",
-        "Optional future Foundry Agent deployment path (same tools)",
     ], s["bullet"]))
     story.append(Paragraph("Out of scope for this POC", s["h2"]))
     story.append(bullets([
         "Invoice / AP / spend-actuals data linkage (separate future POC)",
         "Live LinkSquares production ingestion (fixtures stand in today; same ContractRepository later)",
+        "Azure AI Foundry / managed-agent deployment (removed from this clean POC copy)",
         "Production Teams bot hosting as the primary demo path",
         "Claiming live Fabric SQL as the current validated demo path",
     ], s["bullet"]))
@@ -212,13 +213,13 @@ def build():
     story.append(Paragraph("2. Current Runtime Architecture", s["h1"]))
     story.append(section_rule())
     story.append(Paragraph(
-        "Four layers. Foundry is optional and not required for the current POC path.",
+        "Four layers. Local Streamlit + Flask + FastMCP is the sole validated POC path.",
         s["body"],
     ))
     story.append(layer_box(
         "LAYER 1 — Validation UI",
         "Streamlit test_ui/app.py · http://localhost:8501 · POST /api/messages<br/>"
-        "Sidebar: persona picker · Saved searches (pin / filter / recall)",
+        "Sidebar: persona picker · Saved searches · Delete prior conversations",
         SOFT, s,
     ))
     story.append(arrow(s))
@@ -246,7 +247,7 @@ def build():
         SOFT_AMBER, s,
     ))
     story.append(Paragraph(
-        "Figure 1 — Current POC runtime. Foundry Agent Service is an optional future host for Layer 2.",
+        "Figure 1 — Current POC runtime (Streamlit → Flask → FastMCP → LinkSquares fixtures).",
         s["caption"],
     ))
 
@@ -281,8 +282,7 @@ def build():
     story.append(Paragraph("3. MCP Tool Inventory", s["h1"]))
     story.append(section_rule())
     story.append(Paragraph(
-        "All tools are served by FastMCP. Structured contract tools are the primary POC surface. "
-        "The optional Foundry ToolSet wraps the same structured surface (see Deployment notes).",
+        "All tools are served by FastMCP. Structured contract tools are the primary POC surface.",
         s["body"],
     ))
     tools = [
@@ -458,28 +458,17 @@ def build():
     ], s["bullet"]))
     story.append(PageBreak())
 
-    # 8 Deployment
-    story.append(Paragraph("8. Deployment Notes (Current vs Future)", s["h1"]))
+    # 8 Local run notes
+    story.append(Paragraph("8. Local Run Notes", s["h1"]))
     story.append(section_rule())
-    story.append(Paragraph("Current POC path (required for demos)", s["h2"]))
+    story.append(Paragraph("POC path (required for demos)", s["h2"]))
     story.append(bullets([
-        "Run all three processes locally with LinkSquares offline fixtures",
+        "Run Flask cognitive router + Streamlit UI locally with LinkSquares offline fixtures",
         "Persona memory SQLite under <font face='Courier'>data/persona_memory.sqlite</font> "
         "(override with <font face='Courier'>VAL_MEMORY_DB</font>)",
-        "No Foundry project required",
+        "Delete prior conversations from the Streamlit sidebar or via "
+        "<font face='Courier'>DELETE /api/memory/conversations</font>",
         "Do not commit <font face='Courier'>.env</font> (gitignored; use <font face='Courier'>.env.example</font>)",
-    ], s["bullet"]))
-    story.append(Paragraph("Optional future — Azure AI Foundry", s["h2"]))
-    story.append(bullets([
-        "Script: <font face='Courier'>copilot_agent/deploy_to_foundry.py</font> (optional — not required for POC demos)",
-        "Guide: <font face='Courier'>docs/VAL_CoPilot_Azure_Foundry_Deployment_Guide.*</font>",
-        "ToolSet today wraps 7 structured tools: search_contracts, get_contract_profile, "
-        "get_expiring_contracts, get_vendor_spend_summary, find_overlaps, explain_contract_risk, "
-        "search_cloud_blob_contracts",
-        "Local FastMCP also exposes compare_contracts + check_missing_contract_fields "
-        "(extend Foundry ToolSet next)",
-        "SYSTEM_PROMPT includes compare hard-stop + persona-memory guidance",
-        "Future host swap: Streamlit/Teams → Foundry Agent → same MCP tools → LinkSquares later",
     ], s["bullet"]))
     story.append(PageBreak())
 
@@ -488,7 +477,7 @@ def build():
     story.append(section_rule())
     story.append(bullets([
         "<b>Now:</b> LinkSquares fixtures + full MCP tools + cognitive router + Streamlit + persona memory",
-        "<b>Next:</b> Optional Foundry Agent host; extend ToolSet to include compare + missing-fields",
+        "<b>Next:</b> Live Fabric SQL / Azure AI Search behind the same ContractRepository",
         "<b>Later:</b> Live LinkSquares as source behind ContractRepository (tool contracts unchanged)",
         "<b>Separate track:</b> Invoice / spend-actuals data-linkage POC",
     ], s["bullet"]))
@@ -497,8 +486,8 @@ def build():
     story.append(bullets([
         "<font face='Courier'>docs/VAL_CoPilot_Architecture_and_Process_Flow.pptx</font>",
         "<font face='Courier'>docs/VAL_CoPilot_POC_Changes_and_Scripts.md</font>",
+        "<font face='Courier'>docs/VAL_CoPilot_Python_Procedures_Catalog.xlsx</font>",
         "<font face='Courier'>docs/demo_script.md</font>",
-        "<font face='Courier'>docs/VAL_CoPilot_Azure_Foundry_Deployment_Guide.md</font>",
         "<font face='Courier'>mcp_server/server.py</font>, <font face='Courier'>linksquares_fixtures.py</font>, "
         "<font face='Courier'>contract_repository.py</font>, <font face='Courier'>contract_risk.py</font>",
         "<font face='Courier'>copilot_agent/agent.py</font>, <font face='Courier'>offline_router.py</font>, "

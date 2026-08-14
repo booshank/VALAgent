@@ -212,11 +212,50 @@ class PersonaMemoryStore:
             ).fetchone()
         return dict(row) if row else None
 
-    def delete_conversation(self, conversation_id: str) -> None:
+    def delete_conversation(
+        self,
+        conversation_id: str,
+        *,
+        persona_id: str | None = None,
+    ) -> bool:
+        """Delete a conversation and its messages/searches.
+
+        When ``persona_id`` is provided, only deletes if the conversation belongs
+        to that persona. Returns True when a conversation row was removed.
+        """
+        conversation_id = (conversation_id or "").strip()
+        if not conversation_id:
+            return False
         with self._connect() as conn:
-            conn.execute("DELETE FROM messages WHERE conversation_id = ?", (conversation_id,))
-            conn.execute("DELETE FROM searches WHERE conversation_id = ?", (conversation_id,))
-            conn.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
+            if persona_id:
+                owned = conn.execute(
+                    "SELECT id FROM conversations WHERE id = ? AND persona_id = ?",
+                    (conversation_id, persona_id),
+                ).fetchone()
+                if not owned:
+                    return False
+            conn.execute(
+                "DELETE FROM messages WHERE conversation_id = ?", (conversation_id,)
+            )
+            conn.execute(
+                "DELETE FROM searches WHERE conversation_id = ?", (conversation_id,)
+            )
+            cur = conn.execute(
+                "DELETE FROM conversations WHERE id = ?", (conversation_id,)
+            )
+            return cur.rowcount > 0
+
+    def delete_all_conversations(self, persona_id: str) -> int:
+        """Delete every conversation (and linked messages/searches) for a persona."""
+        persona_id = (persona_id or "").strip()
+        if not persona_id:
+            return 0
+        conversations = self.list_conversations(persona_id, limit=10_000)
+        deleted = 0
+        for conv in conversations:
+            if self.delete_conversation(str(conv["id"]), persona_id=persona_id):
+                deleted += 1
+        return deleted
 
     def append_message(
         self,

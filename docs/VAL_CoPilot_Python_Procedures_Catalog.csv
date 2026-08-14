@@ -1,6 +1,7 @@
 Category,Procedure,Script_File,Type,Use
 MCP Tools,server.py (mcp.run),mcp_server/server.py,Entry point,FastMCP stdio server; installs LinkSquares offline interceptor when USE_OFFLINE_MOCKS is set and registers all MCP tools
-MCP Tools,get_expiring_contracts,mcp_server/server.py,MCP Tool,Returns contracts approaching expiration within a days_ahead window
+MCP Tools,get_expiring_contracts,mcp_server/server.py,MCP Tool,Returns contracts approaching expiration within a days_ahead lookahead window
+MCP Tools,get_contract_renewals,mcp_server/server.py,MCP Tool,Renewal Window List — contracts coming up for renewal in days_ahead or inclusive window_start/window_end
 MCP Tools,get_vendor_spend_summary,mcp_server/server.py,MCP Tool,Rolls up committed contract value by supplier (not invoice spend)
 MCP Tools,compare_contracts,mcp_server/server.py,MCP Tool,Pairwise or N-way compare of any contract IDs; hard-stops with exact unavailable message if sides cannot be resolved
 MCP Tools,check_missing_contract_fields,mcp_server/server.py,MCP Tool,Scans contracts for incomplete commercial fields
@@ -19,6 +20,11 @@ MCP Tools,compare_many_contract_rows,mcp_server/contract_analytics.py,Function,N
 MCP Tools,check_missing_fields_in_rows,mcp_server/contract_analytics.py,Function,Computes which required commercial fields are missing on each row
 MCP Tools,normalize_contract_search_row,mcp_server/contract_analytics.py,Function,Shapes a Gold row into the search_contracts result schema
 MCP Tools,normalize_contract_profile,mcp_server/contract_analytics.py,Function,Shapes a Gold row into the get_contract_profile schema
+MCP Tools,parse_iso_date,mcp_server/contract_analytics.py,Function,Parses ISO/datetime strings into date-only values for window filters
+MCP Tools,resolve_renewal_window,mcp_server/contract_analytics.py,Function,Resolves days_ahead or explicit ISO bounds into an inclusive renewal window
+MCP Tools,renewal_action_date,mcp_server/contract_analytics.py,Function,Prefers RenewalDate and falls back to ExpirationDate as the renewal action date
+MCP Tools,filter_renewals_in_window,mcp_server/contract_analytics.py,Function,"Keeps contracts whose RenewalActionDate falls inside [start, end] inclusive"
+MCP Tools,list_contract_renewals,mcp_server/contract_analytics.py,Function,Builds the renewals-list payload for a particular calendar window
 MCP Tools,ContractRepository,mcp_server/contract_repository.py,Class,Abstract swappable data boundary (list_all get_by_id search get_by_vendor)
 MCP Tools,FabricContractRepository,mcp_server/contract_repository.py,Class,Fabric SQL Gold implementation of ContractRepository (works with offline interceptor)
 MCP Tools,get_contract_repository,mcp_server/contract_repository.py,Function,Returns the process-wide repository singleton used by MCP tools
@@ -39,17 +45,20 @@ Cognitive Router,POST /api/messages,copilot_agent/app.py,API Route,Bot Framework
 Cognitive Router,GET /health,copilot_agent/app.py,API Route,Liveness probe returning service ok status
 Cognitive Router,run_turn,copilot_agent/agent.py,Function,One cognitive turn via LangChain or forced offline router; sanitizes default-compare hallucinations
 Cognitive Router,get_agent_executor,copilot_agent/agent.py,Function,Builds LangChain OpenAI-tools AgentExecutor bound to MCP tools and SYSTEM_PROMPT
-Cognitive Router,SYSTEM_PROMPT,copilot_agent/agent.py,Constant,System prompt encoding lifecycle procedures invoice OOS compare hard-stop and recommendation framework
+Cognitive Router,SYSTEM_PROMPT,copilot_agent/agent.py,Constant,System prompt encoding lifecycle procedures invoice OOS compare hard-stop renewal window list and recommendation framework
+Cognitive Router,RENEWAL WINDOW LIST procedure,copilot_agent/agent.py,Constant,SYSTEM_PROMPT procedure for renewals list in a particular window via get_contract_renewals
+Cognitive Router,PROACTIVE RENEWAL STRATEGY SHEETS,copilot_agent/agent.py,Constant,SYSTEM_PROMPT procedure recommending auto-renew / renegotiate / terminate from renewals or expiring tools
 Cognitive Router,run_offline_turn,copilot_agent/offline_router.py,Function,Deterministic intent-to-tool router when Azure OpenAI is bypassed or compare/memory intents need hard guarantees
 Cognitive Router,is_invoice_out_of_scope,copilot_agent/offline_router.py,Function,Hard-matches invoice/actual-spend intents and refuses them without tool calls
 Cognitive Router,compare_unavailable_message,copilot_agent/offline_router.py,Function,Exact hard-stop copy when compare sides cannot be resolved
 Cognitive Router,sanitize_default_compare_hallucination,copilot_agent/offline_router.py,Function,Strips legacy CON-0001/CON-0002 default-compare hallucinations down to the hard-stop message
-Cognitive Router,_choose_tools,copilot_agent/offline_router.py,Function,Maps user text to MCP tool names or persona_memory_recall
+Cognitive Router,_choose_tools,copilot_agent/offline_router.py,Function,Maps user text to MCP tool names including get_contract_renewals or persona_memory_recall
+Cognitive Router,_parse_renewal_window_kwargs,copilot_agent/offline_router.py,Function,Parses next N days/months or ISO date ranges from renewal/expiry user text
 Cognitive Router,_build_compare_kwargs_from_text,copilot_agent/offline_router.py,Function,Parses N-way compare targets suppliers and limits from user text
 Cognitive Router,_build_compare_recommendation,copilot_agent/offline_router.py,Function,Builds comparative recommendation sections only after a successful compare
 Cognitive Router,_lifecycle_red_flag_audit,copilot_agent/offline_router.py,Function,Offline red-flag compliance audit narrative from tool outputs
 Cognitive Router,_lifecycle_financial_exposure,copilot_agent/offline_router.py,Function,Offline financial exposure projection narrative from tool outputs
-Cognitive Router,_lifecycle_renewal_strategy,copilot_agent/offline_router.py,Function,Offline proactive renewal strategy narrative from tool outputs
+Cognitive Router,_lifecycle_renewal_strategy,copilot_agent/offline_router.py,Function,Offline proactive renewal strategy narrative from renewals/expiring tool outputs
 Cognitive Router,_summarize_persona_memory,copilot_agent/offline_router.py,Function,Serves previous/saved search recall from SQLite without MCP tools
 Cognitive Router,DualMCPBridge,copilot_agent/mcp_clients.py,Class,Dual stdio MCP bridge to local mcp_server and optional uvx pgvector
 Cognitive Router,DualMCPBridge.start / get_tools,copilot_agent/mcp_clients.py,Function,Starts MCP clients and exposes LangChain tools to the cognitive agent
@@ -59,41 +68,38 @@ Persona Memory,POST /api/memory/searches,copilot_agent/app.py,API Route,Explicit
 Persona Memory,DELETE /api/memory/searches/<id>,copilot_agent/app.py,API Route,Deletes one saved or auto-captured search by id
 Persona Memory,GET /api/memory/recall,copilot_agent/app.py,API Route,Retrieves prior searches for chat recall phrases
 Persona Memory,GET /api/memory/conversations,copilot_agent/app.py,API Route,Lists prior conversations for a persona
+Persona Memory,DELETE /api/memory/conversations/<id>,copilot_agent/app.py,API Route,Deletes one prior conversation (messages + linked searches) for a persona
+Persona Memory,DELETE /api/memory/conversations,copilot_agent/app.py,API Route,Deletes all prior conversations for a persona
 Persona Memory,PersonaMemoryStore,memory/store.py,Class,SQLite store for personas conversations messages and searches
 Persona Memory,ensure_persona,memory/store.py,Function,Creates or updates a persona row used as the memory tenant key
 Persona Memory,ensure_conversation / list_conversations,memory/store.py,Function,CRUD helpers for persona-scoped chat conversations
 Persona Memory,append_message / get_messages,memory/store.py,Function,Persists turns and loads chat history for agent/UI replay
 Persona Memory,save_search,memory/store.py,Function,Auto-saves search-like queries or explicitly pins a search
 Persona Memory,list_searches / delete_search,memory/store.py,Function,Lists filters and deletes saved/auto-captured searches
+Persona Memory,delete_conversation,memory/store.py,Function,Removes a conversation and cascading messages/searches; optional persona ownership check
+Persona Memory,delete_all_conversations,memory/store.py,Function,Deletes every conversation for a persona and returns the count removed
 Persona Memory,recall,memory/store.py,Function,Returns prior searches for retrieve-previous-searches flows
 Persona Memory,is_search_like,memory/store.py,Function,Detects whether user text looks like a searchable query for auto-save
 Persona Memory,get_memory_store,memory/store.py,Function,Singleton accessor; DB path from VAL_MEMORY_DB or data/persona_memory.sqlite
 Validation UI,app.py (Streamlit),test_ui/app.py,Entry point,Streamlit validation chat UI posting Bot Framework activities to Flask
 Validation UI,_build_activity / _post_message,test_ui/app.py,Function,Builds Bot Framework activities and POSTs them to /api/messages
-Validation UI,_render_sidebar,test_ui/app.py,Function,Sidebar for personas conversations and Saved searches (filter pin re-run delete)
+Validation UI,_render_sidebar,test_ui/app.py,Function,Sidebar for personas conversations Saved searches and delete prior chats
+Validation UI,_delete_conversation,test_ui/app.py,Function,Deletes a saved chat from persona memory and starts fresh if it was active
 Validation UI,_persist_turn / _switch_conversation,test_ui/app.py,Function,Client-owned persona memory persistence and conversation switching
 Validation UI,mock_messages_server.py,test_ui/mock_messages_server.py,Entry point,Local echo /api/messages backend for UI testing without the real agent
 Validation UI,config.get,test_ui/config.py,Function,Loads COPILOT_MESSAGES_URL and related env from repo-root .env
-Tests,test_offline_mocks.py,mcp_server/test_offline_mocks.py,Test Entry,Offline interceptor roundtrip; asserts tool bodies have no mock branches
-Tests,test_poc_guards.py,copilot_agent/test_poc_guards.py,Test Entry,POC guards for invoice OOS N-way compare hard-stop overlaps risk repository persona recall
+Tests,test_offline_mocks.py,mcp_server/test_offline_mocks.py,Test Entry,Offline interceptor roundtrip including renewals window; asserts tool bodies have no mock branches
+Tests,test_poc_guards.py,copilot_agent/test_poc_guards.py,Test Entry,POC guards for invoice OOS N-way compare hard-stop renewals window overlaps risk repository persona recall
+Tests,test_contract_renewals_window_procedure,copilot_agent/test_poc_guards.py,Test,Asserts get_contract_renewals days_ahead and ISO window filtering including supplier filter
+Tests,test_offline_router_renewal_window_routing,copilot_agent/test_poc_guards.py,Test,Asserts renewals-list intents route to get_contract_renewals and window kwargs parse correctly
 Tests,test_invoice_guardrail_hard_match,copilot_agent/test_poc_guards.py,Test,Asserts invoice/actual-spend intents are refused without tool calls
 Tests,test_compare_contracts_any_ids_and_nway,copilot_agent/test_poc_guards.py,Test,Asserts any-ID and N-way compare_contracts behavior
 Tests,test_offline_router_missing_contract_no_default_compare,copilot_agent/test_poc_guards.py,Test,Asserts missing compare hard-stops with no CON-0001 default table or recommendation
 Tests,test_sanitize_default_compare_hallucination,copilot_agent/test_poc_guards.py,Test,Asserts legacy default-compare hallucination text is sanitized
 Tests,test_persona_memory_recall_routing,copilot_agent/test_poc_guards.py,Test,Asserts previous-search recall phrases route through offline persona memory
-Tests,test_store.py,memory/test_store.py,Test Entry,Unit tests for persona memory CRUD pin/filter/delete and search-like detection
+Tests,test_store.py,memory/test_store.py,Test Entry,Unit tests for persona memory CRUD pin/filter/delete conversations and search-like detection
+Tests,test_delete_conversation_and_all,memory/test_store.py,Test,Asserts persona-scoped conversation delete and delete-all cascade messages/searches
 Tests,test_bot_schema.py,test_ui/test_bot_schema.py,Test Entry,Bot Framework mock activity schema smoke test
 Tests,test_streamlit_ui.py,test_ui/test_streamlit_ui.py,Test Entry,Streamlit AppTest chat roundtrip against mock /api/messages
 Generators,generate_architecture_diagram.py,docs/generate_architecture_diagram.py,Entry point,ReportLab generator for VAL_CoPilot_Architecture_and_Process_Flow.pdf
 Generators,generate_architecture_pptx.py,docs/generate_architecture_pptx.py,Entry point,PowerPoint generator for architecture/process-flow deck
-Persona Memory,DELETE /api/memory/conversations/<id>,copilot_agent/app.py,API Route,Deletes one prior conversation (messages + linked searches) for a persona
-Persona Memory,DELETE /api/memory/conversations,copilot_agent/app.py,API Route,Deletes all prior conversations for a persona
-Persona Memory,delete_conversation,memory/store.py,Function,Removes a conversation and cascading messages/searches; optional persona ownership check
-Persona Memory,delete_all_conversations,memory/store.py,Function,Deletes every conversation for a persona and returns the count removed
-Validation UI,_delete_conversation,test_ui/app.py,Function,Streamlit helper to delete a saved chat from persona memory and start fresh if it was active
-MCP Tools,get_contract_renewals,mcp_server/server.py,MCP Tool,Renewal Window List — contracts coming up for renewal in days_ahead or window_start/window_end
-MCP Tools,list_contract_renewals,mcp_server/contract_analytics.py,Function,Filters catalog rows into an inclusive renewal window and builds the renewals-list payload
-MCP Tools,filter_renewals_in_window,mcp_server/contract_analytics.py,Function,"Keeps contracts whose RenewalActionDate falls inside [start, end]"
-MCP Tools,resolve_renewal_window,mcp_server/contract_analytics.py,Function,Resolves days_ahead or explicit ISO bounds into an inclusive date window
-Cognitive Router,_parse_renewal_window_kwargs,copilot_agent/offline_router.py,Function,Parses next N days/months or ISO date ranges from renewal/expiry user text
-Cognitive Router,RENEWAL WINDOW LIST procedure,copilot_agent/agent.py,Constant,SYSTEM_PROMPT procedure for renewals list in a particular window via get_contract_renewals

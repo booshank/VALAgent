@@ -49,10 +49,21 @@ This is the **local Streamlit → Flask → FastMCP** runtime.
 
 | Item | Detail |
 | --- | --- |
-| **Expected tool** | `get_expiring_contracts(days_ahead≈90..365)` |
-| **Expected behavior** | Near-term expirations / renewal action list from projected LinkSquares renewal dates. |
+| **Expected tool** | `get_contract_renewals(days_ahead≈90)` (or `get_expiring_contracts` for expiry-only wording) |
+| **Expected behavior** | Near-term renewals / renewal action list from projected LinkSquares renewal dates. |
 | **Sample expected output** | Includes ActionRequired 30/60/90 Day contracts such as CON-0001..CON-0015 when inside the lookahead window. |
-| **Success looks like** | Actionable expiry list with vendor + dates (not invoice payments). |
+| **Success looks like** | Actionable renewals list with vendor + RenewalActionDate (not invoice payments). |
+
+---
+
+## 4b. List renewals in a particular window
+
+| Item | Detail |
+| --- | --- |
+| **Example prompts** | “List contract renewals in the next 60 days”; “Show renewals for the renewal window 2026-09-01 to 2026-09-30” |
+| **Expected tool** | `get_contract_renewals` with `days_ahead` or `window_start`/`window_end` |
+| **Expected behavior** | Inclusive window filter on RenewalDate (fallback ExpirationDate); sorted renewals list + optional Proactive Renewal Strategy Sheet. |
+| **Success looks like** | Only contracts whose renewal action date falls inside the requested window. |
 
 ---
 

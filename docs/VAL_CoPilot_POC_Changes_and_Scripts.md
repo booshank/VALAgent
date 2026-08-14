@@ -95,6 +95,7 @@ Streamlit (test_ui/app.py)
 - `ContractRepository` abstraction for swappable data sources.
 - Invoice / actual-spend intents hard out-of-scope (no tool calls).
 - Contract lifecycle cognitive procedures in the system prompt (red-flag audit, counter-clause, exposure, renewal).
+- **Renewal Window List** procedure via `get_contract_renewals` — list contracts coming up for renewal in a particular window (`days_ahead` or explicit ISO `window_start`/`window_end`); uses RenewalDate with ExpirationDate fallback.
 - Comparative analysis decision framework when a compare **succeeds**.
 
 ### 2.5 Offline staging & Azure OpenAI bypass
@@ -116,6 +117,7 @@ Registered in `mcp_server/server.py`:
 | Tool | Purpose |
 | --- | --- |
 | `get_expiring_contracts` | Contracts approaching expiration (Fabric Gold) |
+| `get_contract_renewals` | Renewal Window List — renewals in a `days_ahead` or `window_start`/`window_end` window |
 | `get_vendor_spend_summary` | Contract-value rollups by supplier (not invoice spend) |
 | `compare_contracts` | Pairwise / N-way field comparison; hard-stop if unresolved |
 | `check_missing_contract_fields` | Incomplete commercial field scan |

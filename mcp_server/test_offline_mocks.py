@@ -32,10 +32,13 @@ expiring = json.loads(server.get_expiring_contracts(days_ahead=3650, max_rows=50
 assert expiring["row_count"] > 0, expiring
 assert "ContractID" in expiring["columns"]
 
-renewals = json.loads(server.get_contract_renewals(days_ahead=365, max_rows=50))
+renewals = json.loads(server.list_renewals_in_window(days_ahead=365, max_rows=50))
 assert renewals["row_count"] > 0, renewals
 assert renewals["procedure"] == "renewal_window_list"
+assert renewals["tool"] == "list_renewals_in_window"
 assert renewals["window"]["start"] and renewals["window"]["end"]
+alias_renewals = json.loads(server.get_contract_renewals(days_ahead=365, max_rows=50))
+assert alias_renewals["row_count"] == renewals["row_count"]
 
 spend = json.loads(server.get_vendor_spend_summary(max_rows=50))
 assert spend["row_count"] > 0, spend
@@ -81,12 +84,15 @@ assert by_supplier.get("difference_count", 0) > 0, by_supplier
 assert by_supplier.get("left_supplier_name")
 assert by_supplier.get("right_supplier_name")
 
-missing = json.loads(server.check_missing_contract_fields(max_rows=50))
+missing = json.loads(server.identify_missing_fields(max_rows=50))
 assert "incomplete_contracts" in missing
 assert missing["contracts_evaluated"] > 0
+assert missing["tool"] == "identify_missing_fields"
+alias_missing = json.loads(server.check_missing_contract_fields(max_rows=50))
+assert alias_missing["incomplete_count"] == missing["incomplete_count"]
 
 missing_msft = json.loads(
-    server.check_missing_contract_fields(supplier_name="Microsoft", max_rows=50)
+    server.identify_missing_fields(supplier_name="Microsoft", max_rows=50)
 )
 assert missing_msft["contracts_evaluated"] > 0
 
@@ -154,9 +160,11 @@ def test_production_tools_have_no_mock_branches() -> None:
     # Tool bodies must not branch on USE_OFFLINE_MOCKS.
     tool_markers = [
         "def get_expiring_contracts",
+        "def list_renewals_in_window",
         "def get_contract_renewals",
         "def get_vendor_spend_summary",
         "def compare_contracts",
+        "def identify_missing_fields",
         "def check_missing_contract_fields",
         "def search_cloud_blob_contracts",
         "def search_contracts",

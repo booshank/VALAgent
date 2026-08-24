@@ -312,7 +312,7 @@ def get_expiring_contracts(
 
 
 @mcp.tool()
-def get_contract_renewals(
+def list_renewals_in_window(
     days_ahead: int = 90,
     window_start: str | None = None,
     window_end: str | None = None,
@@ -324,11 +324,12 @@ def get_contract_renewals(
     annual_cost: float | None = None,
 ) -> str:
     """
-    Renewal Window List procedure — contracts coming up for renewal in a window.
+    Renewal Window List (diagram: list_renewals_in_window).
 
-    Prefer RenewalDate; when blank, fall back to ExpirationDate as the renewal
-    action date. Pass either ``days_ahead`` (from today) or an explicit inclusive
-    ``window_start`` / ``window_end`` (ISO dates, e.g. 2026-09-01).
+    Contracts coming up for renewal in a particular window. Prefer RenewalDate;
+    when blank, fall back to ExpirationDate as the renewal action date. Pass
+    either ``days_ahead`` (from today) or inclusive ``window_start`` /
+    ``window_end`` (ISO dates, e.g. 2026-09-01).
 
     Args:
         days_ahead: Lookahead days from today when explicit window dates omitted
@@ -366,6 +367,34 @@ def get_contract_renewals(
         criteria=criteria or None,
     )
     return json.dumps(payload, default=str)
+
+
+@mcp.tool()
+def get_contract_renewals(
+    days_ahead: int = 90,
+    window_start: str | None = None,
+    window_end: str | None = None,
+    max_rows: int = 200,
+    contract_ref: str | None = None,
+    supplier_name: str | None = None,
+    contract_name: str | None = None,
+    contract_type: str | None = None,
+    annual_cost: float | None = None,
+) -> str:
+    """
+    Alias for ``list_renewals_in_window`` (kept for backward compatibility).
+    """
+    return list_renewals_in_window(
+        days_ahead=days_ahead,
+        window_start=window_start,
+        window_end=window_end,
+        max_rows=max_rows,
+        contract_ref=contract_ref,
+        supplier_name=supplier_name,
+        contract_name=contract_name,
+        contract_type=contract_type,
+        annual_cost=annual_cost,
+    )
 
 
 @mcp.tool()
@@ -694,7 +723,7 @@ def compare_contracts(
 
 
 @mcp.tool()
-def check_missing_contract_fields(
+def identify_missing_fields(
     contract_ref: str | None = None,
     supplier_name: str | None = None,
     contract_name: str | None = None,
@@ -703,8 +732,9 @@ def check_missing_contract_fields(
     max_rows: int = 200,
 ) -> str:
     """
-    Check vendor contracts for missing or blank required commercial fields.
+    Missing Data Checker (diagram: identify_missing_fields).
 
+    Identify vendor contracts with missing or blank required commercial fields.
     Optional shared lookup filters narrow the scan by ContractID/Number,
     SupplierName, ContractName, ContractType, or AnnualContractValue.
 
@@ -732,7 +762,32 @@ def check_missing_contract_fields(
         required_fields=list(DEFAULT_REQUIRED_FIELDS),
         criteria=criteria,
     )
+    result["tool"] = "identify_missing_fields"
+    result["aliases"] = ["check_missing_contract_fields"]
+    result["procedure"] = "missing_data_checker"
     return json.dumps(result, default=str)
+
+
+@mcp.tool()
+def check_missing_contract_fields(
+    contract_ref: str | None = None,
+    supplier_name: str | None = None,
+    contract_name: str | None = None,
+    contract_type: str | None = None,
+    annual_cost: float | None = None,
+    max_rows: int = 200,
+) -> str:
+    """
+    Alias for ``identify_missing_fields`` (kept for backward compatibility).
+    """
+    return identify_missing_fields(
+        contract_ref=contract_ref,
+        supplier_name=supplier_name,
+        contract_name=contract_name,
+        contract_type=contract_type,
+        annual_cost=annual_cost,
+        max_rows=max_rows,
+    )
 
 
 @mcp.tool()

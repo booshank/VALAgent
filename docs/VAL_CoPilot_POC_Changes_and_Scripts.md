@@ -117,7 +117,10 @@ Registered in `mcp_server/server.py`:
 | Tool | Purpose |
 | --- | --- |
 | `get_expiring_contracts` | Contracts approaching expiration (Fabric Gold) |
-| `get_contract_renewals` | Renewal Window List — renewals in a `days_ahead` or `window_start`/`window_end` window |
+| `list_renewals_in_window` | Renewal Window List (diagram name) — renewals in a `days_ahead` or `window_start`/`window_end` window |
+| `get_contract_renewals` | Alias for `list_renewals_in_window` (backward compatible) |
+| `identify_missing_fields` | Missing Data Checker (diagram name) — incomplete commercial field scan |
+| `check_missing_contract_fields` | Alias for `identify_missing_fields` (backward compatible) |
 | `get_vendor_spend_summary` | Contract-value rollups by supplier (not invoice spend) |
 | `compare_contracts` | Pairwise / N-way field comparison; hard-stop if unresolved |
 | `check_missing_contract_fields` | Incomplete commercial field scan |

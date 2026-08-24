@@ -651,7 +651,7 @@ def _summarize_missing_payload(raw: str, limit: int = 20) -> str:
         lines.append(f"... {len(incomplete) - limit} more incomplete contracts omitted")
     if not incomplete:
         lines.append("All evaluated contracts have the required fields populated.")
-    lines.append("Source: Fabric SQL Gold (MCP check_missing_contract_fields)")
+    lines.append("Source: Fabric SQL Gold (MCP identify_missing_fields)")
     return "\n".join(lines)
 
 
@@ -1160,7 +1160,7 @@ def _choose_tools(user_text: str) -> list[str]:
         ):
             chosen.append("search_contracts")
     if _MISSING_RE.search(text):
-        chosen.append("check_missing_contract_fields")
+        chosen.append("identify_missing_fields")
         if (
             "search_contracts" not in chosen
             and "explain_contract_risk" not in chosen
@@ -1171,14 +1171,14 @@ def _choose_tools(user_text: str) -> list[str]:
         and re.search(r"\b(list|window|upcoming|next|within|days?|months?)\b", text, re.I)
         and not _MISSING_RE.search(text)
     ):
-        chosen.append("get_contract_renewals")
+        chosen.append("list_renewals_in_window")
     elif _EXPIRE_RE.search(text) or (
         _RENEWAL_RE.search(text) and not _MISSING_RE.search(text)
     ):
         # Prefer the dedicated renewals-window tool when the ask is about a list
         # in a time window; otherwise keep legacy expiring-contracts routing.
         if re.search(r"\b(list|window|upcoming|next\s+\d+|within)\b", text, re.I):
-            chosen.append("get_contract_renewals")
+            chosen.append("list_renewals_in_window")
         else:
             chosen.append("get_expiring_contracts")
     if _SPEND_RE.search(text) or _EXPOSURE_RE.search(text):
@@ -1186,7 +1186,7 @@ def _choose_tools(user_text: str) -> list[str]:
         chosen.append("get_vendor_spend_summary")
     if _EXPOSURE_RE.search(text):
         chosen.append("search_cloud_blob_contracts")
-        if "get_contract_renewals" not in chosen and "get_expiring_contracts" not in chosen:
+        if "list_renewals_in_window" not in chosen and "get_expiring_contracts" not in chosen:
             chosen.append("get_expiring_contracts")
     if _DOC_SEARCH_RE.search(text):
         chosen.append("search_cloud_blob_contracts")
@@ -1520,7 +1520,7 @@ async def run_offline_turn(
             sections.append(f"Tool `{name}` is unavailable in the current MCP session.")
             continue
         try:
-            if name == "get_contract_renewals":
+            if name in {"list_renewals_in_window", "get_contract_renewals"}:
                 window_kwargs = _parse_renewal_window_kwargs(user_text)
                 raw = await _ainvoke_tool(
                     tool,
@@ -1743,7 +1743,7 @@ async def run_offline_turn(
                 else:
                     raw = await _ainvoke_tool(tool, contract_id=cid)
                     sections.append(_summarize_contract_profile(raw))
-            elif name == "check_missing_contract_fields":
+            elif name in {"identify_missing_fields", "check_missing_contract_fields"}:
                 raw = await _ainvoke_tool(tool, max_rows=100, **shared_filters)
                 sections.append(_summarize_missing_payload(raw))
                 search_raw = None
@@ -1800,9 +1800,10 @@ async def run_offline_turn(
                     continue
                 # Skip duplicate search when missing-field audit already fetched clauses.
                 if (
-                    "check_missing_contract_fields" in selected
-                    and _MISSING_RE.search(user_text)
-                    and any("## Red-Flag Compliance Audit" in s for s in sections)
+                    "identify_missing_fields" in selected
+                    or "check_missing_contract_fields" in selected
+                ) and _MISSING_RE.search(user_text) and any(
+                    "## Red-Flag Compliance Audit" in s for s in sections
                 ):
                     continue
                 raw = await _ainvoke_tool(

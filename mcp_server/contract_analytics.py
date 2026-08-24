@@ -651,7 +651,8 @@ def list_contract_renewals(
     )
     capped = renewals[: max(1, int(max_rows))]
     return {
-        "tool": "get_contract_renewals",
+        "tool": "list_renewals_in_window",
+        "aliases": ["get_contract_renewals"],
         "procedure": "renewal_window_list",
         "window": {
             "start": start.isoformat(),

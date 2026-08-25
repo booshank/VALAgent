@@ -596,6 +596,38 @@ def test_offline_router_missing_fields_routing() -> None:
     print("missing fields routing OK")
 
 
+def test_specific_contract_lookup_uses_profile_not_list() -> None:
+    """Asking about one contract ID must return that profile, not a full list."""
+    from offline_router import _choose_tools, run_offline_turn
+
+    queries = [
+        "contract information for CON-0001",
+        "Show contract information for CON-0002",
+        "Tell me about CON-0003",
+        "What is the contract information for CON-0010?",
+        "Give me information about contract CON-0005",
+        "CON-0001",
+    ]
+    for q in queries:
+        tools = _choose_tools(q)
+        assert tools == ["get_contract_profile"], (q, tools)
+        assert "search_contracts" not in tools, (q, tools)
+
+    # Vendor list asks must still use structured search (plural contracts).
+    vendor_tools = _choose_tools("Show contracts for Oracle")
+    assert "search_contracts" in vendor_tools, vendor_tools
+    assert "get_contract_profile" not in vendor_tools, vendor_tools
+
+    async def _run() -> str:
+        return await run_offline_turn("contract information for CON-0001")
+
+    reply = asyncio.run(_run())
+    assert "Contract profile: CON-0001" in reply, reply[:500]
+    assert "Structured contract search" not in reply
+    assert "CON-0002" not in reply  # must not dump other contracts
+    print("specific contract lookup OK")
+
+
 if __name__ == "__main__":
     test_invoice_guardrail_hard_match()
     test_search_contracts_microsoft()
@@ -613,4 +645,5 @@ if __name__ == "__main__":
     test_offline_router_renewal_window_routing()
     test_identify_missing_fields_diagram_alias()
     test_offline_router_missing_fields_routing()
+    test_specific_contract_lookup_uses_profile_not_list()
     print("all POC guard checks passed")

@@ -75,8 +75,10 @@ _DOC_SEARCH_RE = re.compile(
     re.I,
 )
 _STRUCTURED_SEARCH_RE = re.compile(
-    r"\b(show\s+contracts?|list\s+contracts?|find\s+contracts?|search\s+contracts?|"
-    r"contracts?\s+for)\b",
+    r"\b("
+    r"show\s+contracts\b|list\s+contracts?\b|find\s+contracts?\b|search\s+contracts?\b|"
+    r"contracts\s+for\b"
+    r")",
     re.I,
 )
 _OVERLAP_RE = re.compile(
@@ -89,7 +91,13 @@ _RISK_RE = re.compile(
     re.I,
 )
 _PROFILE_RE = re.compile(
-    r"\b(details?\s+for\s+contract|contract\s+profile|show\s+details?|full\s+profile)\b",
+    r"\b("
+    r"details?\s+for\s+contract|contract\s+profile|show\s+details?|full\s+profile|"
+    r"contract\s+information|information\s+(?:about|for|on)\s+(?:the\s+)?contract|"
+    r"tell\s+me\s+about|what\s+(?:is|are)\s+(?:the\s+)?(?:details?|information)|"
+    r"get\s+(?:the\s+)?(?:profile|details?|information)|"
+    r"show\s+(?:me\s+)?(?:the\s+)?contract\b"
+    r")\b",
     re.I,
 )
 _COMPARE_RE = re.compile(
@@ -1134,6 +1142,11 @@ def _parse_renewal_window_kwargs(user_text: str) -> dict[str, Any]:
 def _choose_tools(user_text: str) -> list[str]:
     text = user_text.strip()
     chosen: list[str] = []
+    contract_ids = list(dict.fromkeys(_CONTRACT_ID_RE.findall(text)))
+    single_contract_id = len(contract_ids) == 1
+    explicit_list_search = bool(
+        re.search(r"\b(list|find|search)\s+contracts?\b", text, re.I)
+    )
     if _MEMORY_RECALL_RE.search(text):
         # Memory recall is handled locally (no MCP tool required).
         return ["persona_memory_recall"]
@@ -1143,20 +1156,32 @@ def _choose_tools(user_text: str) -> list[str]:
         chosen.append("find_overlaps")
     if _RISK_RE.search(text):
         chosen.append("explain_contract_risk")
-    if _PROFILE_RE.search(text) or (
+    # One specific contract ID → full profile (not an unfiltered contract list).
+    if (
+        single_contract_id
+        and "compare_contracts" not in chosen
+        and "find_overlaps" not in chosen
+        and not explicit_list_search
+        and not _RENEWAL_LIST_RE.search(text)
+    ) or _PROFILE_RE.search(text) or (
         _CONTRACT_ID_RE.search(text)
-        and re.search(r"\b(detail|profile|show)\b", text, re.I)
+        and re.search(r"\b(detail|profile|show|information|about)\b", text, re.I)
         and not _COMPARE_RE.search(text)
     ):
         chosen.append("get_contract_profile")
     if "find_overlaps" not in chosen and "explain_contract_risk" not in chosen:
-        if _STRUCTURED_SEARCH_RE.search(text) or (
-            re.search(r"\bcontracts?\b", text, re.I)
-            and _SUPPLIER_RE.search(text)
-            and "compare_contracts" not in chosen
-            and "get_contract_profile" not in chosen
-            and not _RENEWAL_LIST_RE.search(text)
-            and not _EXPIRE_RE.search(text)
+        if (
+            "get_contract_profile" not in chosen
+            and (
+                _STRUCTURED_SEARCH_RE.search(text)
+                or (
+                    re.search(r"\bcontracts?\b", text, re.I)
+                    and _SUPPLIER_RE.search(text)
+                    and "compare_contracts" not in chosen
+                    and not _RENEWAL_LIST_RE.search(text)
+                    and not _EXPIRE_RE.search(text)
+                )
+            )
         ):
             chosen.append("search_contracts")
     if _MISSING_RE.search(text):
@@ -1164,6 +1189,7 @@ def _choose_tools(user_text: str) -> list[str]:
         if (
             "search_contracts" not in chosen
             and "explain_contract_risk" not in chosen
+            and "get_contract_profile" not in chosen
         ):
             chosen.append("search_contracts")
     if _RENEWAL_LIST_RE.search(text) or (
@@ -1191,7 +1217,11 @@ def _choose_tools(user_text: str) -> list[str]:
     if _DOC_SEARCH_RE.search(text):
         chosen.append("search_cloud_blob_contracts")
     if not chosen:
-        chosen = ["search_contracts"]
+        # Bare contract id with no other intent → profile; otherwise list search.
+        if single_contract_id:
+            chosen = ["get_contract_profile"]
+        else:
+            chosen = ["search_contracts"]
     # Invoice-related turns must never call spend rollups.
     if is_invoice_out_of_scope(text):
         return []

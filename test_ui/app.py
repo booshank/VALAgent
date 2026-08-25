@@ -31,6 +31,83 @@ DEFAULT_URL = "http://localhost:3978/api/messages"
 DEFAULT_PERSONA_ID = "validation-user"
 DEFAULT_PERSONA_NAME = "Validation User"
 
+# Sidebar / main Quick Actions → natural-language prompts for the cognitive router.
+QUICK_ACTIONS: list[tuple[str, str, str]] = [
+    (
+        "detect-overlaps",
+        "📊 Detect Tool Overlaps",
+        "Detect overlapping contracts across vendors",
+    ),
+    (
+        "high-risk",
+        "⚠️ High Risk Contracts",
+        "Explain contract risk for high risk contracts",
+    ),
+    (
+        "upcoming-renewals",
+        "📅 Upcoming Renewals",
+        "List upcoming renewals in the next 90 days",
+    ),
+    (
+        "audit-missing",
+        "🔍 Audit Missing Clauses",
+        "Audit missing clauses and incomplete contract fields",
+    ),
+]
+
+
+def _inject_quick_actions_styles() -> None:
+    st.markdown(
+        """
+<style>
+div[data-testid="stVerticalBlock"] > div.quick-actions-wrap {
+  margin-bottom: 0.5rem;
+}
+.quick-actions-header {
+  background: #1f6feb;
+  color: #ffffff;
+  font-weight: 700;
+  font-size: 1.05rem;
+  padding: 0.55rem 0.9rem;
+  border-radius: 4px;
+  margin: 0 0 0.65rem 0;
+  letter-spacing: 0.01em;
+}
+div.stButton > button[kind="secondary"] {
+  border: 1px solid #d0d7de;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #24292f;
+  font-weight: 500;
+  padding-top: 0.65rem;
+  padding-bottom: 0.65rem;
+}
+div.stButton > button[kind="secondary"]:hover {
+  border-color: #1f6feb;
+  color: #1f6feb;
+}
+</style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_quick_actions(*, key_prefix: str = "main") -> None:
+    """Render the Quick Actions panel; each button queues a chat turn."""
+    st.markdown(
+        '<div class="quick-actions-header">Quick Actions</div>',
+        unsafe_allow_html=True,
+    )
+    for key, label, prompt in QUICK_ACTIONS:
+        if st.button(
+            label,
+            key=f"quick-action-{key_prefix}-{key}",
+            use_container_width=True,
+            help=prompt,
+        ):
+            st.session_state.pending_prompt = prompt
+            st.rerun()
+
 
 def _build_activity(
     text: str,
@@ -365,13 +442,15 @@ def _render_sidebar(messages_url: str) -> str:
         "- `channelId` = `emulator`\n"
         "- Includes `activityId` + `conversationId` + persona\n"
         "- Never calls `mcp_server/` directly\n"
-        "- Memory persists under `data/persona_memory.sqlite`"
+        "- Memory persists under `data/persona_memory.sqlite`\n"
+        "- Quick Actions run overlap / risk / renewals / missing-clause procedures"
     )
     return messages_url
 
 
 def main() -> None:
     st.set_page_config(page_title="VAL CoPilot Validation UI", layout="wide")
+    _inject_quick_actions_styles()
     _init_state()
 
     st.title("VAL CoPilot — Validation UI")
@@ -384,13 +463,20 @@ def main() -> None:
     with st.sidebar:
         messages_url = _render_sidebar(get("COPILOT_MESSAGES_URL", DEFAULT_URL))
 
-    for item in st.session_state.messages:
-        with st.chat_message(item["role"]):
-            st.markdown(item["content"])
-            if item.get("meta"):
-                with st.expander("Bot Framework exchange"):
-                    st.json(item["meta"])
+    # Quick Actions panel (product mock) — right rail above the chat transcript.
+    chat_col, actions_col = st.columns([3, 1], gap="large")
+    with actions_col:
+        _render_quick_actions(key_prefix="main")
 
+    with chat_col:
+        for item in st.session_state.messages:
+            with st.chat_message(item["role"]):
+                st.markdown(item["content"])
+                if item.get("meta"):
+                    with st.expander("Bot Framework exchange"):
+                        st.json(item["meta"])
+
+    # chat_input must stay at the root of the page script (not nested in columns).
     prompt = st.session_state.pending_prompt or st.chat_input("Send a validation message…")
     if st.session_state.pending_prompt:
         st.session_state.pending_prompt = None

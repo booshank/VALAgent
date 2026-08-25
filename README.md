@@ -1,11 +1,13 @@
 # VAL CoPilot Workspace (`val-copilot-workspace`)
 
 Multi-agent monorepo with three strictly decoupled boundaries. Modify only the
-directory that matches your role; keep package management and concerns isolated.
+directory that matches your role; Python dependencies are consolidated in the
+root `requirements.txt`.
 
 ```
 val-copilot-workspace/
 ├── .env                 # single shared secrets file (from .env.example)
+├── requirements.txt     # consolidated Python dependencies (all layers)
 ├── mcp_server/          # ROLE 1 — Data Retrieval Agent
 ├── copilot_agent/       # ROLE 2 — Cognitive Routing Agent
 └── test_ui/             # ROLE 3 — Validation Agent
@@ -35,12 +37,13 @@ cp .env.example .env
 # edit .env with Azure OpenAI, Fabric, AI Search, and PGVector values
 ```
 
-2. Install each layer’s dependencies in its own virtualenv:
+2. Install dependencies from the consolidated root requirements file (each layer
+   still uses its own virtualenv; folder `requirements.txt` files re-export the root list):
 
 ```bash
-python -m venv mcp_server/.venv && mcp_server/.venv/bin/pip install -r mcp_server/requirements.txt
-python -m venv copilot_agent/.venv && copilot_agent/.venv/bin/pip install -r copilot_agent/requirements.txt
-python -m venv test_ui/.venv && test_ui/.venv/bin/pip install -r test_ui/requirements.txt
+python -m venv mcp_server/.venv && mcp_server/.venv/bin/pip install -r requirements.txt
+python -m venv copilot_agent/.venv && copilot_agent/.venv/bin/pip install -r requirements.txt
+python -m venv test_ui/.venv && test_ui/.venv/bin/pip install -r requirements.txt
 ```
 
 > Cognitive routing uses LangChain’s `create_openai_tools_agent` + `AgentExecutor`

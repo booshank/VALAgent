@@ -1,0 +1,29 @@
+# VAL CoPilot — consolidated Python dependencies
+# Install (from repo root):  pip install -r requirements.txt
+# Layer-specific files under mcp_server/, copilot_agent/, and test_ui/
+# re-export this list via `-r ../requirements.txt`.
+
+# Shared
+python-dotenv>=1.0.1
+flask>=3.0.3
+
+# mcp_server — Data Retrieval Agent (FastMCP / Fabric / Azure AI Search)
+mcp[cli]>=1.24.0,<2.0.0
+fastmcp>=2.0.0
+pyodbc>=5.1.0
+pandas>=2.2.0
+azure-search-documents>=11.6.0
+azure-identity>=1.19.0
+
+# copilot_agent — Cognitive Routing Agent (LangChain / Bot Framework ingress)
+langchain>=1.0.0
+langchain-classic>=1.0.0
+langchain-openai>=0.3.0
+langchain-core>=1.0.0
+langchain-mcp-adapters>=0.0.9
+openai>=1.50.0
+aiohttp>=3.10.0
+
+# test_ui — Validation Agent (Streamlit harness)
+streamlit>=1.39.0
+requests>=2.32.0

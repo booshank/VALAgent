@@ -117,7 +117,10 @@ Registered in `mcp_server/server.py`:
 | Tool | Purpose |
 | --- | --- |
 | `get_expiring_contracts` | Contracts approaching expiration (Fabric Gold) |
-| `get_contract_renewals` | Renewal Window List — renewals in a `days_ahead` or `window_start`/`window_end` window |
+| `list_renewals_in_window` | Renewal Window List (diagram name) — renewals in a `days_ahead` or `window_start`/`window_end` window |
+| `get_contract_renewals` | Alias for `list_renewals_in_window` (backward compatible) |
+| `identify_missing_fields` | Missing Data Checker (diagram name) — incomplete commercial field scan |
+| `check_missing_contract_fields` | Alias for `identify_missing_fields` (backward compatible) |
 | `get_vendor_spend_summary` | Contract-value rollups by supplier (not invoice spend) |
 | `compare_contracts` | Pairwise / N-way field comparison; hard-stop if unresolved |
 | `check_missing_contract_fields` | Incomplete commercial field scan |
@@ -158,7 +161,8 @@ Legend: **R** = runtime · **G** = generator · **T** = test · **C** = config/s
 
 | Script | Kind | Description |
 | --- | --- | --- |
-| `copilot_agent/app.py` | **R** | Flask Bot Framework ingress (`POST /api/messages`), health, and persona memory REST APIs. Dedicated asyncio loop for agent turns. |
+| `copilot_agent/app.py` | **R** | Flask Bot Framework ingress (`POST /api/messages`), health, and persona memory REST APIs. Dedicated asyncio loop for agent turns. Appends per-query **Response time** footer to each reply. |
+| `copilot_agent/response_time.py` | **R** | Format / append / strip response-time footers (idempotent; stripped from chat history). |
 | `copilot_agent/agent.py` | **R** | LangChain `create_openai_tools_agent` + `AgentExecutor`, system prompt routing domains, offline/403 fallback. Forces offline for compare + memory-recall intents. `run_turn()`. |
 | `copilot_agent/offline_router.py` | **R** | Deterministic intent → tool router used when Azure OpenAI is bypassed/firewalled. Compare hard-stop, summarizers, lifecycle sections, persona memory recall. `run_offline_turn()`. |
 | `copilot_agent/mcp_clients.py` | **R** | Dual stdio MCP bridge: local `../mcp_server/server.py` + optional `uvx mcp-server-pgvector`. |

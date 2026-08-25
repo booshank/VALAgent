@@ -496,22 +496,33 @@ assert start.isoformat() == "2026-08-14"
 assert end.isoformat() == "2026-11-12"
 
 payload = json.loads(
-    server.get_contract_renewals(
+    server.list_renewals_in_window(
         days_ahead=90,
         max_rows=50,
     )
 )
 assert payload["procedure"] == "renewal_window_list", payload
-assert payload["tool"] == "get_contract_renewals", payload
+assert payload["tool"] == "list_renewals_in_window", payload
+assert "get_contract_renewals" in (payload.get("aliases") or []), payload
 assert payload["row_count"] > 0, payload
 assert "window" in payload and payload["window"]["start"] and payload["window"]["end"]
 for row in payload["rows"]:
     assert row.get("RenewalActionDate"), row
     assert row.get("ContractID") or row.get("contract_id")
 
+# Diagram-aligned name and legacy alias should match.
+alias = json.loads(
+    server.get_contract_renewals(
+        days_ahead=90,
+        max_rows=50,
+    )
+)
+assert alias["row_count"] == payload["row_count"]
+assert alias["tool"] == "list_renewals_in_window"
+
 # Explicit ISO window should constrain results.
 narrow = json.loads(
-    server.get_contract_renewals(
+    server.list_renewals_in_window(
         window_start="2026-08-14",
         window_end="2026-08-31",
         max_rows=50,
@@ -523,7 +534,7 @@ assert narrow["row_count"] >= 1
 assert narrow["row_count"] <= payload["row_count"]
 
 msft = json.loads(
-    server.get_contract_renewals(
+    server.list_renewals_in_window(
         days_ahead=365,
         supplier_name="Microsoft",
         max_rows=50,
@@ -547,10 +558,10 @@ print(json.dumps({
 def test_offline_router_renewal_window_routing() -> None:
     from offline_router import _choose_tools, _parse_renewal_window_kwargs
 
-    assert "get_contract_renewals" in _choose_tools(
+    assert "list_renewals_in_window" in _choose_tools(
         "List contract renewals in the next 60 days"
     )
-    assert "get_contract_renewals" in _choose_tools(
+    assert "list_renewals_in_window" in _choose_tools(
         "Show the renewals list for the renewal window 2026-09-01 to 2026-09-30"
     )
     assert _parse_renewal_window_kwargs("renewals in the next 60 days")["days_ahead"] == 60
@@ -558,6 +569,31 @@ def test_offline_router_renewal_window_routing() -> None:
     iso = _parse_renewal_window_kwargs("renewal window 2026-09-01 to 2026-09-30")
     assert iso == {"window_start": "2026-09-01", "window_end": "2026-09-30"}
     print("renewal window routing OK")
+
+
+def test_identify_missing_fields_diagram_alias() -> None:
+    out = _run_mcp_snippet(
+        r"""
+import json, server
+primary = json.loads(server.identify_missing_fields(max_rows=50))
+alias = json.loads(server.check_missing_contract_fields(max_rows=50))
+assert primary["tool"] == "identify_missing_fields", primary
+assert primary["procedure"] == "missing_data_checker", primary
+assert "check_missing_contract_fields" in (primary.get("aliases") or [])
+assert primary["incomplete_count"] == alias["incomplete_count"]
+assert primary["incomplete_count"] > 0
+print(json.dumps({"incomplete": primary["incomplete_count"]}))
+"""
+    )
+    print("identify_missing_fields OK", out)
+
+
+def test_offline_router_missing_fields_routing() -> None:
+    from offline_router import _choose_tools
+
+    chosen = _choose_tools("Which contracts have missing renewal information?")
+    assert "identify_missing_fields" in chosen, chosen
+    print("missing fields routing OK")
 
 
 if __name__ == "__main__":
@@ -575,4 +611,6 @@ if __name__ == "__main__":
     test_contract_repository_abstraction()
     test_contract_renewals_window_procedure()
     test_offline_router_renewal_window_routing()
+    test_identify_missing_fields_diagram_alias()
+    test_offline_router_missing_fields_routing()
     print("all POC guard checks passed")

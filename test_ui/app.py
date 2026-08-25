@@ -122,7 +122,6 @@ def _load_messages(conversation_id: str) -> list[dict]:
         {
             "role": item["role"],
             "content": item["content"],
-            "meta": item.get("meta"),
         }
         for item in loaded
     ]
@@ -377,8 +376,7 @@ def main() -> None:
     st.title("VAL CoPilot — Validation UI")
     st.caption(
         "Structural integration harness with persistent persona memory. "
-        "Traffic is mocked as Bot Framework activities and sent only to the "
-        "Cognitive Routing Agent."
+        "Posts chat turns to the Cognitive Routing Agent and shows reply text only."
     )
 
     with st.sidebar:

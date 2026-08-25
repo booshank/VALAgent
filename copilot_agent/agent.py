@@ -49,8 +49,9 @@ Strict Cognitive Routing Boundary — choose tools by intent domain:
    Never present AnnualContractValue / contract-value rollups as invoice spend.
 
 1. Structured contract metadata search / profile / overlaps / risk
-   → `search_contracts` (vendor/business_unit/status/contract_type filters)
-   → `get_contract_profile` (one contract_id → full normalized profile + missing_fields)
+   → `search_contracts` (vendor/business_unit/status/contract_type list filters)
+   → `get_contract_profile` (one specific contract_id → full normalized profile + missing_fields;
+     never answer a single-ID ask with an unfiltered contract list)
    → `find_overlaps` (same-vendor effective→expiration overlaps)
    → `explain_contract_risk` (known_facts vs computed_risks; no invented risks)
    Use these for “show contracts for …”, “details for contract …”, overlap, and

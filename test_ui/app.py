@@ -387,9 +387,6 @@ def main() -> None:
     for item in st.session_state.messages:
         with st.chat_message(item["role"]):
             st.markdown(item["content"])
-            if item.get("meta"):
-                with st.expander("Bot Framework exchange"):
-                    st.json(item["meta"])
 
     prompt = st.session_state.pending_prompt or st.chat_input("Send a validation message…")
     if st.session_state.pending_prompt:
@@ -419,12 +416,10 @@ def main() -> None:
                     else None
                 ) or f"(HTTP {result['status_code']}) {body}"
                 st.markdown(reply_text)
-                with st.expander("Bot Framework exchange"):
-                    st.json(result)
                 st.session_state.messages.append(
-                    {"role": "assistant", "content": reply_text, "meta": result}
+                    {"role": "assistant", "content": reply_text}
                 )
-                _persist_turn("assistant", reply_text, meta=result)
+                _persist_turn("assistant", reply_text)
             except requests.RequestException as exc:
                 err = f"Request failed: {exc}"
                 st.error(err)

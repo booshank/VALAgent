@@ -214,6 +214,31 @@ def memory_conversations() -> Any:
     )
 
 
+@app.delete("/api/memory/conversations/<conversation_id>")
+def memory_delete_conversation(conversation_id: str) -> Any:
+    """Delete one prior conversation (messages + linked searches) for a persona."""
+    persona_id = (request.args.get("persona_id") or "").strip() or None
+    store = get_memory_store()
+    deleted = store.delete_conversation(conversation_id, persona_id=persona_id)
+    if not deleted:
+        return jsonify(
+            {"error": "conversation not found", "id": conversation_id}
+        ), 404
+    return jsonify({"deleted": True, "id": conversation_id}), 200
+
+
+@app.delete("/api/memory/conversations")
+def memory_delete_all_conversations() -> Any:
+    """Delete all prior conversations for a persona."""
+    persona_id = (request.args.get("persona_id") or "").strip()
+    if not persona_id:
+        return jsonify({"error": "persona_id is required"}), 400
+    store = get_memory_store()
+    store.ensure_persona(persona_id)
+    deleted = store.delete_all_conversations(persona_id)
+    return jsonify({"deleted": True, "persona_id": persona_id, "count": deleted}), 200
+
+
 @app.post("/api/messages")
 def messages() -> Any:
     """

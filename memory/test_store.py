@@ -93,6 +93,43 @@ class PersonaMemoryStoreTests(unittest.TestCase):
         self.assertTrue(self.store.delete_search(int(pinned["id"]), persona_id="analyst-2"))
         self.assertEqual(self.store.list_searches("analyst-2", saved_only=True), [])
 
+    def test_delete_conversation_and_all(self) -> None:
+        self.store.ensure_persona("analyst-3", "Analyst Three")
+        conv_a = self.store.ensure_conversation(None, "analyst-3", title="Microsoft chat")
+        conv_b = self.store.ensure_conversation(None, "analyst-3", title="AWS chat")
+        self.store.append_message(
+            conv_a["id"],
+            "user",
+            "Show contracts for Microsoft",
+            persona_id="analyst-3",
+        )
+        self.store.append_message(
+            conv_b["id"],
+            "user",
+            "Show contracts for AWS",
+            persona_id="analyst-3",
+        )
+        self.assertEqual(len(self.store.list_conversations("analyst-3")), 2)
+        self.assertEqual(len(self.store.get_messages(conv_a["id"])), 1)
+
+        # Wrong persona must not delete.
+        self.assertFalse(
+            self.store.delete_conversation(conv_a["id"], persona_id="other-persona")
+        )
+        self.assertIsNotNone(self.store.get_conversation(conv_a["id"]))
+
+        self.assertTrue(
+            self.store.delete_conversation(conv_a["id"], persona_id="analyst-3")
+        )
+        self.assertIsNone(self.store.get_conversation(conv_a["id"]))
+        self.assertEqual(self.store.get_messages(conv_a["id"]), [])
+        self.assertEqual(len(self.store.list_conversations("analyst-3")), 1)
+
+        deleted = self.store.delete_all_conversations("analyst-3")
+        self.assertEqual(deleted, 1)
+        self.assertEqual(self.store.list_conversations("analyst-3"), [])
+        self.assertEqual(self.store.list_searches("analyst-3"), [])
+
     def test_is_search_like(self) -> None:
         self.assertTrue(is_search_like("Compare CON-0001 and CON-0002"))
         self.assertTrue(is_search_like("Retrieve my searches"))

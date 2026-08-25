@@ -108,6 +108,12 @@ In Azure Portal → your OpenAI resource → **Networking**:
 
 Until that allowlist is updated, local chat uses the offline router automatically.
 
+## POC changes & scripts reference
+
+Full inventory of delivered changes and every meaningful Python script:
+
+- [`docs/VAL_CoPilot_POC_Changes_and_Scripts.md`](docs/VAL_CoPilot_POC_Changes_and_Scripts.md)
+
 ## Persona memory (persistent searches / conversations)
 
 Streamlit and the Cognitive Routing Agent share a SQLite persona store at

@@ -1,0 +1,42 @@
+Category,Procedure,Script_File,Type,Use
+MCP Tools,server.py (mcp.run),mcp_server/server.py,Entry point,FastMCP stdio server; installs LinkSquares offline interceptor when USE_OFFLINE_MOCKS is set and registers all MCP tools
+MCP Tools,search_contracts,mcp_server/server.py,MCP Tool,Structured Gold metadata search; returns contract_not_present when nothing matches
+MCP Tools,get_contract_profile,mcp_server/server.py,MCP Tool,Full normalized profile for one ContractID; not-present if missing
+MCP Tools,compare_contracts,mcp_server/server.py,MCP Tool,Pairwise or N-way compare of any contract IDs; hard-stops if unresolved
+MCP Tools,list_renewals_in_window,mcp_server/server.py,MCP Tool,Diagram tool — Renewal Window List for days_ahead or window_start/window_end
+MCP Tools,get_contract_renewals,mcp_server/server.py,MCP Tool,Alias for list_renewals_in_window (backward compatible)
+MCP Tools,find_overlaps,mcp_server/server.py,MCP Tool,Detects same-vendor effective-to-expiration date overlaps
+MCP Tools,identify_missing_fields,mcp_server/server.py,MCP Tool,Diagram tool — Missing Data Checker for incomplete commercial fields
+MCP Tools,check_missing_contract_fields,mcp_server/server.py,MCP Tool,Alias for identify_missing_fields (backward compatible)
+MCP Tools,explain_contract_risk,mcp_server/server.py,MCP Tool,Returns known_facts versus computed_risks for filtered contracts
+MCP Tools,get_expiring_contracts,mcp_server/server.py,MCP Tool,Returns contracts approaching expiration within a days_ahead lookahead
+MCP Tools,get_vendor_spend_summary,mcp_server/server.py,MCP Tool,Rolls up committed contract value by supplier (not invoice spend)
+MCP Tools,search_cloud_blob_contracts,mcp_server/server.py,MCP Tool,Hybrid semantic / clause search via Azure AI Search (or offline docs)
+MCP Tools,fabric_health_check,mcp_server/server.py,MCP Tool,Probes Fabric SQL connectivity or offline interceptor health
+MCP Tools,list_contract_renewals,mcp_server/contract_analytics.py,Function,Builds renewals-list payload for a particular calendar window
+MCP Tools,filter_renewals_in_window,mcp_server/contract_analytics.py,Function,"Keeps contracts whose RenewalActionDate falls inside [start, end]"
+MCP Tools,resolve_renewal_window,mcp_server/contract_analytics.py,Function,Resolves days_ahead or explicit ISO bounds into an inclusive window
+MCP Tools,renewal_action_date,mcp_server/contract_analytics.py,Function,Prefers RenewalDate; falls back to ExpirationDate
+MCP Tools,check_missing_fields_in_rows,mcp_server/contract_analytics.py,Function,Computes missing required commercial fields per row
+MCP Tools,compare_contract_rows / compare_many_contract_rows,mcp_server/contract_analytics.py,Function,Pairwise and N-way field comparison engines
+MCP Tools,ContractRepository / FabricContractRepository,mcp_server/contract_repository.py,Class,Swappable Gold/offline contract data boundary
+MCP Tools,find_overlapping_contracts,mcp_server/contract_risk.py,Function,Overlap Detection Engine over same-vendor date windows
+MCP Tools,explain_contract_risks,mcp_server/contract_risk.py,Function,Renewal/Risk engine helper separating known_facts from computed_risks
+Fixtures,build_offline_fixture_tables,mcp_server/linksquares_fixtures.py,Function,Projects LinkSquares JSON into Gold-shaped offline tables
+Cognitive Router,app.py (Flask),copilot_agent/app.py,Entry point,Flask cognitive routing agent with /api/messages and memory APIs
+Cognitive Router,run_turn,copilot_agent/agent.py,Function,LangChain or offline cognitive turn with SYSTEM_PROMPT lifecycle procedures
+Cognitive Router,SYSTEM_PROMPT diagram tools,copilot_agent/agent.py,Constant,Routes to search/profile/compare/list_renewals_in_window/find_overlaps/identify_missing_fields/explain_contract_risk
+Cognitive Router,RENEWAL WINDOW LIST procedure,copilot_agent/agent.py,Constant,Lifecycle procedure for renewals list in a particular window
+Cognitive Router,run_offline_turn / _choose_tools,copilot_agent/offline_router.py,Function,Deterministic intent→tool router including diagram-aligned tool names
+Cognitive Router,_parse_renewal_window_kwargs,copilot_agent/offline_router.py,Function,Parses next N days/months or ISO ranges for list_renewals_in_window
+Cognitive Router,_lifecycle_renewal_strategy,copilot_agent/offline_router.py,Function,Response formatter for Proactive Renewal Strategy Sheet
+Cognitive Router,_lifecycle_red_flag_audit,copilot_agent/offline_router.py,Function,Response formatter for Red-Flag Compliance Audit from missing fields
+Persona Memory,DELETE /api/memory/conversations,copilot_agent/app.py,API Route,Deletes prior conversations for a persona (one or all)
+Persona Memory,delete_conversation / delete_all_conversations,memory/store.py,Function,SQLite cascade delete for conversations messages and linked searches
+Validation UI,_delete_conversation,test_ui/app.py,Function,Streamlit delete prior chats from persona memory
+Tests,test_contract_renewals_window_procedure,copilot_agent/test_poc_guards.py,Test,Asserts list_renewals_in_window window filtering and alias parity
+Tests,test_identify_missing_fields_diagram_alias,copilot_agent/test_poc_guards.py,Test,Asserts identify_missing_fields diagram tool and check_missing alias
+Tests,test_offline_router_renewal_window_routing,copilot_agent/test_poc_guards.py,Test,Asserts renewals-list intents route to list_renewals_in_window
+Tests,test_offline_router_missing_fields_routing,copilot_agent/test_poc_guards.py,Test,Asserts missing-field intents route to identify_missing_fields
+Generators,generate_architecture_diagram.py,docs/generate_architecture_diagram.py,Entry point,Architecture PDF generator
+Generators,generate_architecture_pptx.py,docs/generate_architecture_pptx.py,Entry point,Architecture PPTX generator

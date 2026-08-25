@@ -7,7 +7,7 @@ Fixture sources:
 - `mcp_server/LinSquare_Contracts_100_Updated_30bb.json` (100 contracts)
 - `mcp_server/agreement_9a06.json` (shared agreement metadata)
 
-This is **not** an Azure AI Foundry-first runtime.
+This is the **local Streamlit → Flask → FastMCP** runtime.
 
 ---
 
@@ -49,10 +49,21 @@ This is **not** an Azure AI Foundry-first runtime.
 
 | Item | Detail |
 | --- | --- |
-| **Expected tool** | `get_expiring_contracts(days_ahead≈90..365)` |
-| **Expected behavior** | Near-term expirations / renewal action list from projected LinkSquares renewal dates. |
+| **Expected tool** | `list_renewals_in_window(days_ahead≈90)` (alias `get_contract_renewals`; or `get_expiring_contracts` for expiry-only wording) |
+| **Expected behavior** | Near-term renewals / renewal action list from projected LinkSquares renewal dates. |
 | **Sample expected output** | Includes ActionRequired 30/60/90 Day contracts such as CON-0001..CON-0015 when inside the lookahead window. |
-| **Success looks like** | Actionable expiry list with vendor + dates (not invoice payments). |
+| **Success looks like** | Actionable renewals list with vendor + RenewalActionDate (not invoice payments). |
+
+---
+
+## 4b. List renewals in a particular window
+
+| Item | Detail |
+| --- | --- |
+| **Example prompts** | “List contract renewals in the next 60 days”; “Show renewals for the renewal window 2026-09-01 to 2026-09-30” |
+| **Expected tool** | `list_renewals_in_window` with `days_ahead` or `window_start`/`window_end` |
+| **Expected behavior** | Inclusive window filter on RenewalDate (fallback ExpirationDate); sorted renewals list + optional Proactive Renewal Strategy Sheet. |
+| **Success looks like** | Only contracts whose renewal action date falls inside the requested window. |
 
 ---
 
@@ -60,7 +71,7 @@ This is **not** an Azure AI Foundry-first runtime.
 
 | Item | Detail |
 | --- | --- |
-| **Expected tool** | `check_missing_contract_fields` and/or `search_contracts` + profile missing_fields |
+| **Expected tool** | `identify_missing_fields` (alias `check_missing_contract_fields`) and/or `search_contracts` + profile missing_fields |
 | **Expected behavior** | Surfaces contracts with blank/null RenewalDate (sample seed: `CON-0016`..`CON-0020`). |
 | **Sample expected output** | Those IDs flagged for missing RenewalDate / EffectiveDate / ExpirationDate. |
 | **Success looks like** | Explicit missing-field list; no fabricated renewal dates. |

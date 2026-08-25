@@ -24,6 +24,7 @@ from reportlab.platypus import (
 )
 
 OUT = Path(__file__).resolve().parent / "VAL_CoPilot_Architecture_and_Process_Flow.pdf"
+ARTIFACT = Path("/opt/cursor/artifacts/VAL_CoPilot_Architecture_and_Process_Flow.pdf")
 
 NAVY = HexColor("#0B1F3A")
 STEEL = HexColor("#1F4E79")
@@ -166,8 +167,8 @@ def build():
     ))
     story.append(Spacer(1, 0.35 * inch))
     story.append(Paragraph(
-        "Current runtime: Streamlit → Flask Cognitive Router → FastMCP Tools → Synthetic Gold Data<br/>"
-        "Optional future: Azure AI Foundry Agent Service wrapping the same tools",
+        "Current runtime: Streamlit → Flask Cognitive Router → FastMCP Tools → LinkSquares Fixtures<br/>"
+        "+ Persona memory (save / recall / delete) · Compare hard-stop",
         s["cover_sub"],
     ))
     story.append(Spacer(1, 1.6 * inch))
@@ -180,23 +181,29 @@ def build():
     story.append(Paragraph(
         "VAL CoPilot is a <b>synthetic contract intelligence tool-layer POC</b>. It proves that structured "
         "contract analytics can be exposed as MCP tools and consumed by a cognitive router that produces "
-        "deterministic lifecycle workflows. It is intentionally <b>not</b> an Azure AI Foundry-first product "
-        "demo, and it does not claim live Fabric / LinkSquares production connectivity.",
+        "deterministic lifecycle workflows. The validated runtime is "
+        "<b>Streamlit → Flask → FastMCP → LinkSquares fixtures</b>. It does not claim live Fabric / "
+        "LinkSquares production connectivity.",
         s["body"],
     ))
     story.append(Paragraph("In scope", s["h2"]))
     story.append(bullets([
-        "Synthetic Gold contract data via offline fixtures (<font face='Courier'>USE_OFFLINE_MOCKS=true</font>)",
-        "FastMCP tool layer: search, profiles, renewals, spend rollups, overlaps, risk explanations",
+        "Synthetic Gold contract data via <b>LinkSquares</b> offline fixtures "
+        "(<font face='Courier'>LinSquare_Contracts_100_Updated_30bb.json</font> + "
+        "<font face='Courier'>agreement_9a06.json</font>; <font face='Courier'>USE_OFFLINE_MOCKS=true</font>)",
+        "FastMCP tool layer: search, profiles, renewals, spend rollups, overlaps, risk, "
+        "<b>N-way compare</b>, missing-field checks",
         "Cognitive router: Azure OpenAI + LangChain tool-calling, or offline keyword router",
         "Hard OOS guardrail for invoice/spend linkage requests",
+        "Compare hard-stop when suppliers/IDs are missing (no default CON-0001/CON-0002 pair)",
+        "Persona memory: save / pin / filter / retrieve / <b>delete</b> previous searches and conversations",
         "Streamlit Validation UI for local demos",
-        "Optional future Foundry Agent deployment path (same tools)",
     ], s["bullet"]))
     story.append(Paragraph("Out of scope for this POC", s["h2"]))
     story.append(bullets([
         "Invoice / AP / spend-actuals data linkage (separate future POC)",
-        "Live LinkSquares ingestion (future data source behind the same tools)",
+        "Live LinkSquares production ingestion (fixtures stand in today; same ContractRepository later)",
+        "Azure AI Foundry / managed-agent deployment (removed from this clean POC copy)",
         "Production Teams bot hosting as the primary demo path",
         "Claiming live Fabric SQL as the current validated demo path",
     ], s["bullet"]))
@@ -206,49 +213,53 @@ def build():
     story.append(Paragraph("2. Current Runtime Architecture", s["h1"]))
     story.append(section_rule())
     story.append(Paragraph(
-        "Four layers. Foundry is optional and not required for the current POC path.",
+        "Four layers. Local Streamlit + Flask + FastMCP is the sole validated POC path.",
         s["body"],
     ))
     story.append(layer_box(
         "LAYER 1 — Validation UI",
-        "Streamlit test_ui/app.py · http://localhost:8501 · POST /api/messages",
+        "Streamlit test_ui/app.py · http://localhost:8501 · POST /api/messages<br/>"
+        "Sidebar: persona picker · Saved searches · Delete prior conversations",
         SOFT, s,
     ))
     story.append(arrow(s))
     story.append(layer_box(
-        "LAYER 2 — Cognitive Routing",
+        "LAYER 2 — Cognitive Routing + Persona Memory",
         "Flask copilot_agent · AzureChatOpenAI + AgentExecutor, or offline_router.py<br/>"
-        "Lifecycle procedures · Invoice/spend OOS guardrail · Recommendation synthesis",
+        "Lifecycle procedures · Invoice/spend OOS · Compare hard-stop · /api/memory/* REST<br/>"
+        "SQLite memory/store.py (data/persona_memory.sqlite)",
         SOFT_TEAL, s,
     ))
     story.append(arrow(s))
     story.append(layer_box(
         "LAYER 3 — Data Retrieval (MCP Tools)",
         "FastMCP mcp_server · ContractRepository · analytics + risk helpers<br/>"
-        "search_contracts · get_contract_profile · get_expiring_contracts · get_vendor_spend_summary<br/>"
-        "find_overlaps · explain_contract_risk · search_cloud_blob_contracts",
+        "search_contracts · get_contract_profile · compare_contracts · check_missing_contract_fields<br/>"
+        "get_expiring_contracts · get_vendor_spend_summary · find_overlaps · explain_contract_risk<br/>"
+        "search_cloud_blob_contracts · fabric_health_check",
         SOFT, s,
     ))
     story.append(arrow(s))
     story.append(layer_box(
-        "LAYER 4 — Synthetic Gold Data",
-        "mcp_server/LinSquare_Contracts_100_Updated_30bb.json + agreement_9a06.json (offline) · Future: live Fabric SQL / LinkSquares behind same repository interface",
+        "LAYER 4 — Synthetic Gold Data (LinkSquares fixtures)",
+        "LinSquare_Contracts_100_Updated_30bb.json + agreement_9a06.json via linksquares_fixtures.py<br/>"
+        "Future: live Fabric SQL / LinkSquares behind the same ContractRepository interface",
         SOFT_AMBER, s,
     ))
     story.append(Paragraph(
-        "Figure 1 — Current POC runtime. Foundry Agent Service is an optional future host for Layer 2.",
+        "Figure 1 — Current POC runtime (Streamlit → Flask → FastMCP → LinkSquares fixtures).",
         s["caption"],
     ))
 
     story.append(Paragraph("Request path", s["h2"]))
     path = [
         ["Step", "Component", "Action"],
-        ["1", "Validation UI", "User asks a contract question"],
-        ["2", "Cognitive Router", "OOS check → tool plan → MCP calls"],
-        ["3", "MCP Tools", "Repository + analytics/risk helpers"],
-        ["4", "Synthetic Gold", "Fixture rows (or future Fabric/LinkSquares)"],
-        ["5", "Cognitive Router", "Lifecycle Markdown + ## Recommendation"],
-        ["6", "Validation UI", "Render answer"],
+        ["1", "Validation UI", "User asks a contract question (optional: recall saved search)"],
+        ["2", "Cognitive Router", "OOS / hard-stop / memory-recall → tool plan → MCP calls"],
+        ["3", "MCP Tools", "Repository + analytics/risk/compare helpers"],
+        ["4", "Synthetic Gold", "LinkSquares fixture rows (or future Fabric/LinkSquares)"],
+        ["5", "Cognitive Router", "Lifecycle Markdown + ## Recommendation (skipped on hard-stop)"],
+        ["6", "Validation UI", "Render answer; auto-save search-like queries to persona memory"],
     ]
     cell = s["small"]
     hdr = ParagraphStyle("th", parent=cell, fontName="Helvetica-Bold", textColor=white)
@@ -271,19 +282,24 @@ def build():
     story.append(Paragraph("3. MCP Tool Inventory", s["h1"]))
     story.append(section_rule())
     story.append(Paragraph(
-        "All tools are served by FastMCP. Structured contract tools are the primary POC surface. "
-        "The optional Foundry ToolSet wraps the same structured surface (see Deployment notes).",
+        "All tools are served by FastMCP. Structured contract tools are the primary POC surface.",
         s["body"],
     ))
     tools = [
         ["Tool", "Purpose", "Notes"],
-        ["search_contracts", "Keyword / field search", "Vendor, category, status, ID"],
-        ["get_contract_profile", "Full contract record", "By ContractID"],
-        ["get_expiring_contracts", "Renewal window", "DaysAhead; notice fields"],
+        ["search_contracts", "Structured metadata search", "Vendor/BU/status/type; not-present if empty"],
+        ["get_contract_profile", "Full contract record", "By ContractID; not-present if missing"],
+        ["compare_contracts", "Pairwise / N-way compare", "Any IDs; hard-stop if unresolved"],
+        ["list_renewals_in_window", "Renewal Window List", "days_ahead or window_start/end"],
+        ["get_contract_renewals", "Alias", "→ list_renewals_in_window"],
+        ["identify_missing_fields", "Missing Data Checker", "Incomplete commercial fields"],
+        ["check_missing_contract_fields", "Alias", "→ identify_missing_fields"],
+        ["get_expiring_contracts", "Expiration lookahead", "DaysAhead; notice fields"],
         ["get_vendor_spend_summary", "Committed value rollup", "Not invoice actuals"],
-        ["find_overlaps", "Same-vendor date overlaps", "Risk helper"],
+        ["find_overlaps", "Same-vendor date overlaps", "OverlapFlag-aware"],
         ["explain_contract_risk", "Structured risk brief", "facts / risks / gaps / action"],
-        ["search_cloud_blob_contracts", "Blob keyword search", "Optional Azure path"],
+        ["search_cloud_blob_contracts", "Clause / doc search", "Azure AI Search path"],
+        ["fabric_health_check", "Connectivity probe", "Offline health OK"],
     ]
     tdata = [[Paragraph(c, hdr if r == 0 else cell) for c in row] for r, row in enumerate(tools)]
     t = Table(tdata, colWidths=[2.0 * inch, 2.2 * inch, 2.6 * inch])
@@ -303,6 +319,13 @@ def build():
         "<b>Hard OOS guardrail:</b> invoice/spend-actuals questions never call tools. Exact reply:<br/>"
         "<font face='Courier'>Invoice/spend data is not part of this synthetic contract intelligence POC. "
         "This requires a separate data-linkage POC.</font>",
+        s["body"],
+    ))
+    story.append(Spacer(1, 0.08 * inch))
+    story.append(Paragraph(
+        "<b>Compare hard-stop:</b> if any requested supplier or contract ID cannot be resolved, "
+        "return <b>only</b> this message — no table, no recommendation, no default CON-0001/CON-0002 pair:<br/>"
+        "<font face='Courier'>The contract information requested for the comparison is not available at the moment</font>",
         s["body"],
     ))
     story.append(PageBreak())
@@ -330,8 +353,9 @@ def build():
     story.append(section_rule())
     story.append(Paragraph(
         "Encoded in <font face='Courier'>SYSTEM_PROMPT</font> and mirrored by "
-        "<font face='Courier'>offline_router.py</font>. Every answer ends with "
-        "<font face='Courier'>## Recommendation</font>.",
+        "<font face='Courier'>offline_router.py</font>. Successful answers end with "
+        "<font face='Courier'>## Recommendation</font>. "
+        "<b>Exception:</b> compare hard-stop and invoice OOS return a single exact message only.",
         s["body"],
     ))
     procs = [
@@ -340,7 +364,10 @@ def build():
         ["Counter-Clause Drafting", "Negotiate / rewrite", "Weak Language · Counter-Clause · ## Recommendation"],
         ["Financial Exposure", "Liability / TCV / exposure", "Exposure Summary · Liability Map · ## Recommendation"],
         ["Renewal Strategy", "Renew / expire / notice", "Timeline · Decision Matrix · ## Recommendation"],
-        ["Comparative Analysis", "Compare / vs / alternative", "Side-by-Side · Trade-offs · ## Recommendation"],
+        ["Renewal Window List", "Renewals in N days / date range", "get_contract_renewals sorted list"],
+        ["Comparative Analysis", "Compare succeeds", "Side-by-Side · Trade-offs · ## Recommendation"],
+        ["Compare hard-stop", "Any compare side unresolved", "Exact unavailable message only (no table)"],
+        ["Persona memory recall", "Previous / saved searches", "SQLite recall via /api/memory/*"],
     ]
     tdata = [[Paragraph(c, hdr if r == 0 else cell) for c in row] for r, row in enumerate(procs)]
     t = Table(tdata, colWidths=[1.7 * inch, 1.8 * inch, 3.3 * inch])
@@ -379,6 +406,21 @@ def build():
         "Router detects invoice/spend intent <b>before tools</b>",
         "Exact OOS message returned; no MCP calls",
     ], s["bullet"]))
+    story.append(Paragraph("D. Compare hard-stop (missing supplier / ID)", s["h2"]))
+    story.append(bullets([
+        "UI → Router: “Compare Acme vs Zeta” (or unknown CON-* IDs)",
+        "Compare intent forced through offline router (no LLM default pair)",
+        "MCP / resolver cannot resolve one or more sides",
+        "Return <b>only</b>: “The contract information requested for the comparison is not available at the moment”",
+        "No comparative table, no ## Recommendation, no CON-0001 vs CON-0002 fallback",
+    ], s["bullet"]))
+    story.append(Paragraph("E. Persona memory recall", s["h2"]))
+    story.append(bullets([
+        "UI → Router: “Show my previous Microsoft searches” (or sidebar Saved searches)",
+        "Memory-recall intent forced through offline persona store",
+        "Flask <font face='Courier'>/api/memory/recall</font> or Streamlit sidebar → SQLite",
+        "Return prior queries / pinned searches for that persona",
+    ], s["bullet"]))
     story.append(PageBreak())
 
     # 7 Local
@@ -414,27 +456,23 @@ def build():
     story.append(bullets([
         "<font face='Courier'>python mcp_server/test_offline_mocks.py</font>",
         "<font face='Courier'>python copilot_agent/test_poc_guards.py</font>",
-        "Demo script: <font face='Courier'>docs/demo_script.md</font> (8 deterministic questions)",
+        "Demo script: <font face='Courier'>docs/demo_script.md</font> (deterministic questions)",
+        "Persona memory: <font face='Courier'>python memory/test_store.py</font>",
+        "POC changes reference: <font face='Courier'>docs/VAL_CoPilot_POC_Changes_and_Scripts.md</font>",
     ], s["bullet"]))
     story.append(PageBreak())
 
-    # 8 Deployment
-    story.append(Paragraph("8. Deployment Notes (Current vs Future)", s["h1"]))
+    # 8 Local run notes
+    story.append(Paragraph("8. Local Run Notes", s["h1"]))
     story.append(section_rule())
-    story.append(Paragraph("Current POC path (required for demos)", s["h2"]))
+    story.append(Paragraph("POC path (required for demos)", s["h2"]))
     story.append(bullets([
-        "Run all three processes locally with offline fixtures",
-        "No Foundry project required",
+        "Run Flask cognitive router + Streamlit UI locally with LinkSquares offline fixtures",
+        "Persona memory SQLite under <font face='Courier'>data/persona_memory.sqlite</font> "
+        "(override with <font face='Courier'>VAL_MEMORY_DB</font>)",
+        "Delete prior conversations from the Streamlit sidebar or via "
+        "<font face='Courier'>DELETE /api/memory/conversations</font>",
         "Do not commit <font face='Courier'>.env</font> (gitignored; use <font face='Courier'>.env.example</font>)",
-    ], s["bullet"]))
-    story.append(Paragraph("Optional future — Azure AI Foundry", s["h2"]))
-    story.append(bullets([
-        "Script: <font face='Courier'>deploy_to_foundry.py</font> (optional — not required for POC demos)",
-        "Guide: <font face='Courier'>docs/VAL_CoPilot_Azure_Foundry_Deployment_Guide.*</font>",
-        "ToolSet wraps the structured MCP surface: search_contracts, get_contract_profile, "
-        "get_expiring_contracts, get_vendor_spend_summary, find_overlaps, explain_contract_risk, "
-        "search_cloud_blob_contracts",
-        "Future host swap: Streamlit/Teams → Foundry Agent → same MCP tools → LinkSquares later",
     ], s["bullet"]))
     story.append(PageBreak())
 
@@ -442,19 +480,23 @@ def build():
     story.append(Paragraph("9. Evolution Roadmap", s["h1"]))
     story.append(section_rule())
     story.append(bullets([
-        "<b>Now:</b> Synthetic Gold + MCP tools + cognitive router + Streamlit",
-        "<b>Next:</b> Optional Foundry Agent host; extend ToolSet to full MCP inventory",
-        "<b>Later:</b> LinkSquares as source behind ContractRepository (tool contracts unchanged)",
+        "<b>Now:</b> LinkSquares fixtures + full MCP tools + cognitive router + Streamlit + persona memory",
+        "<b>Next:</b> Live Fabric SQL / Azure AI Search behind the same ContractRepository",
+        "<b>Later:</b> Live LinkSquares as source behind ContractRepository (tool contracts unchanged)",
         "<b>Separate track:</b> Invoice / spend-actuals data-linkage POC",
     ], s["bullet"]))
     story.append(Spacer(1, 0.25 * inch))
     story.append(Paragraph("Related artifacts", s["h2"]))
     story.append(bullets([
         "<font face='Courier'>docs/VAL_CoPilot_Architecture_and_Process_Flow.pptx</font>",
+        "<font face='Courier'>docs/VAL_CoPilot_POC_Changes_and_Scripts.md</font>",
+        "<font face='Courier'>docs/VAL_CoPilot_Python_Procedures_Catalog.xlsx</font>",
         "<font face='Courier'>docs/demo_script.md</font>",
-        "<font face='Courier'>docs/VAL_CoPilot_Azure_Foundry_Deployment_Guide.md</font>",
-        "<font face='Courier'>mcp_server/server.py</font>, <font face='Courier'>contract_repository.py</font>, <font face='Courier'>contract_risk.py</font>",
-        "<font face='Courier'>copilot_agent/agent.py</font>, <font face='Courier'>offline_router.py</font>",
+        "<font face='Courier'>mcp_server/server.py</font>, <font face='Courier'>linksquares_fixtures.py</font>, "
+        "<font face='Courier'>contract_repository.py</font>, <font face='Courier'>contract_risk.py</font>",
+        "<font face='Courier'>copilot_agent/agent.py</font>, <font face='Courier'>offline_router.py</font>, "
+        "<font face='Courier'>app.py</font>",
+        "<font face='Courier'>memory/store.py</font>, <font face='Courier'>test_ui/app.py</font>",
     ], s["bullet"]))
     story.append(Spacer(1, 0.35 * inch))
     story.append(HRFlowable(width="100%", thickness=1.5, color=NAVY, spaceBefore=4, spaceAfter=8))
@@ -478,6 +520,12 @@ def build():
 
     doc.build(story, onFirstPage=first_page, onLaterPages=later)
     print(f"Wrote {OUT}")
+    try:
+        ARTIFACT.parent.mkdir(parents=True, exist_ok=True)
+        ARTIFACT.write_bytes(OUT.read_bytes())
+        print(f"Wrote {ARTIFACT}")
+    except OSError as exc:
+        print(f"Artifact copy skipped: {exc}")
 
 
 if __name__ == "__main__":

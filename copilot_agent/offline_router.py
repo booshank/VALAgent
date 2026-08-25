@@ -110,6 +110,26 @@ _RENEWAL_RE = re.compile(
     r"\b(renew\w*|renegotiat\w*|terminat\w*|auto[\s-]?renew|strategy\s*sheet)\b",
     re.I,
 )
+_RENEWAL_LIST_RE = re.compile(
+    r"\b("
+    r"renewals?\s+list|list\s+(?:of\s+)?renewals?|renewal\s+window|"
+    r"coming\s+up\s+for\s+renewal|up\s+for\s+renewal|"
+    r"contracts?\s+(?:due\s+)?(?:for\s+)?renewal|find\s+renewals?"
+    r")\b",
+    re.I,
+)
+_WINDOW_DAYS_RE = re.compile(
+    r"\b(?:next|within|in|for|over|across)\s+(\d+)\s*days?\b|\b(\d+)\s*[- ]?day(?:s)?\s+window\b",
+    re.I,
+)
+_WINDOW_MONTHS_RE = re.compile(
+    r"\b(?:next|within|in|for|over|across)\s+(\d+)\s*months?\b",
+    re.I,
+)
+_WINDOW_ISO_RE = re.compile(
+    r"\b(20\d{2}-\d{2}-\d{2})\s*(?:to|through|until|-|–|—)\s*(20\d{2}-\d{2}-\d{2})\b",
+    re.I,
+)
 _CONTRACT_ID_RE = re.compile(r"\b(?:CON|CNT|C)-\d+\b", re.I)
 _ANNUAL_COST_RE = re.compile(
     r"\b(?:annual(?:\s*contract)?\s*(?:cost|value)|acv)\s*[:=]?\s*\$?([\d,]+(?:\.\d+)?)\b",
@@ -631,7 +651,7 @@ def _summarize_missing_payload(raw: str, limit: int = 20) -> str:
         lines.append(f"... {len(incomplete) - limit} more incomplete contracts omitted")
     if not incomplete:
         lines.append("All evaluated contracts have the required fields populated.")
-    lines.append("Source: Fabric SQL Gold (MCP check_missing_contract_fields)")
+    lines.append("Source: Fabric SQL Gold (MCP identify_missing_fields)")
     return "\n".join(lines)
 
 
@@ -1084,6 +1104,33 @@ def is_invoice_out_of_scope(user_text: str) -> bool:
     return bool(_INVOICE_OOS_RE.search(user_text or ""))
 
 
+def _parse_renewal_window_kwargs(user_text: str) -> dict[str, Any]:
+    """Extract days_ahead or explicit ISO window bounds from renewal/expiry asks."""
+    text = user_text or ""
+    iso = _WINDOW_ISO_RE.search(text)
+    if iso:
+        return {
+            "window_start": iso.group(1),
+            "window_end": iso.group(2),
+        }
+    months = _WINDOW_MONTHS_RE.search(text)
+    if months:
+        return {"days_ahead": max(1, int(months.group(1)) * 30)}
+    days = _WINDOW_DAYS_RE.search(text)
+    if days:
+        value = days.group(1) or days.group(2)
+        return {"days_ahead": max(1, int(value))}
+    # Common shorthand phrases.
+    lowered = text.lower()
+    if re.search(r"\b(this|current)\s+quarter\b", lowered):
+        return {"days_ahead": 90}
+    if re.search(r"\b(this|next)\s+year\b", lowered):
+        return {"days_ahead": 365}
+    if re.search(r"\bnext\s+week\b", lowered):
+        return {"days_ahead": 7}
+    return {"days_ahead": 90}
+
+
 def _choose_tools(user_text: str) -> list[str]:
     text = user_text.strip()
     chosen: list[str] = []
@@ -1108,25 +1155,39 @@ def _choose_tools(user_text: str) -> list[str]:
             and _SUPPLIER_RE.search(text)
             and "compare_contracts" not in chosen
             and "get_contract_profile" not in chosen
+            and not _RENEWAL_LIST_RE.search(text)
+            and not _EXPIRE_RE.search(text)
         ):
             chosen.append("search_contracts")
     if _MISSING_RE.search(text):
-        chosen.append("check_missing_contract_fields")
+        chosen.append("identify_missing_fields")
         if (
             "search_contracts" not in chosen
             and "explain_contract_risk" not in chosen
         ):
             chosen.append("search_contracts")
-    if _EXPIRE_RE.search(text) or (
+    if _RENEWAL_LIST_RE.search(text) or (
+        _RENEWAL_RE.search(text)
+        and re.search(r"\b(list|window|upcoming|next|within|days?|months?)\b", text, re.I)
+        and not _MISSING_RE.search(text)
+    ):
+        chosen.append("list_renewals_in_window")
+    elif _EXPIRE_RE.search(text) or (
         _RENEWAL_RE.search(text) and not _MISSING_RE.search(text)
     ):
-        chosen.append("get_expiring_contracts")
+        # Prefer the dedicated renewals-window tool when the ask is about a list
+        # in a time window; otherwise keep legacy expiring-contracts routing.
+        if re.search(r"\b(list|window|upcoming|next\s+\d+|within)\b", text, re.I):
+            chosen.append("list_renewals_in_window")
+        else:
+            chosen.append("get_expiring_contracts")
     if _SPEND_RE.search(text) or _EXPOSURE_RE.search(text):
         # Contract-value rollups only — never for invoice intents (blocked earlier).
         chosen.append("get_vendor_spend_summary")
     if _EXPOSURE_RE.search(text):
         chosen.append("search_cloud_blob_contracts")
-        chosen.append("get_expiring_contracts")
+        if "list_renewals_in_window" not in chosen and "get_expiring_contracts" not in chosen:
+            chosen.append("get_expiring_contracts")
     if _DOC_SEARCH_RE.search(text):
         chosen.append("search_cloud_blob_contracts")
     if not chosen:
@@ -1459,10 +1520,39 @@ async def run_offline_turn(
             sections.append(f"Tool `{name}` is unavailable in the current MCP session.")
             continue
         try:
-            if name == "get_expiring_contracts":
+            if name in {"list_renewals_in_window", "get_contract_renewals"}:
+                window_kwargs = _parse_renewal_window_kwargs(user_text)
                 raw = await _ainvoke_tool(
                     tool,
-                    days_ahead=365,
+                    max_rows=25,
+                    **window_kwargs,
+                    **shared_filters,
+                )
+                try:
+                    renew_payload = json.loads(raw)
+                except json.JSONDecodeError:
+                    renew_payload = {}
+                window = renew_payload.get("window") or {}
+                title = (
+                    "Contract renewals "
+                    f"({window.get('start', '?')} → {window.get('end', '?')})"
+                )
+                sections.append(_summarize_sql_payload(raw, title=title))
+                spend_raw = None
+                spend_tool = tools.get("get_vendor_spend_summary")
+                if spend_tool:
+                    spend_filters = {
+                        key: shared_filters[key]
+                        for key in ("supplier_name", "contract_type", "annual_cost")
+                        if key in shared_filters
+                    }
+                    spend_raw = await _ainvoke_tool(spend_tool, max_rows=25, **spend_filters)
+                sections.append(_lifecycle_renewal_strategy(raw, spend_raw))
+            elif name == "get_expiring_contracts":
+                window_kwargs = _parse_renewal_window_kwargs(user_text)
+                raw = await _ainvoke_tool(
+                    tool,
+                    days_ahead=int(window_kwargs.get("days_ahead") or 365),
                     max_rows=25,
                     **shared_filters,
                 )
@@ -1653,7 +1743,7 @@ async def run_offline_turn(
                 else:
                     raw = await _ainvoke_tool(tool, contract_id=cid)
                     sections.append(_summarize_contract_profile(raw))
-            elif name == "check_missing_contract_fields":
+            elif name in {"identify_missing_fields", "check_missing_contract_fields"}:
                 raw = await _ainvoke_tool(tool, max_rows=100, **shared_filters)
                 sections.append(_summarize_missing_payload(raw))
                 search_raw = None
@@ -1710,9 +1800,10 @@ async def run_offline_turn(
                     continue
                 # Skip duplicate search when missing-field audit already fetched clauses.
                 if (
-                    "check_missing_contract_fields" in selected
-                    and _MISSING_RE.search(user_text)
-                    and any("## Red-Flag Compliance Audit" in s for s in sections)
+                    "identify_missing_fields" in selected
+                    or "check_missing_contract_fields" in selected
+                ) and _MISSING_RE.search(user_text) and any(
+                    "## Red-Flag Compliance Audit" in s for s in sections
                 ):
                     continue
                 raw = await _ainvoke_tool(

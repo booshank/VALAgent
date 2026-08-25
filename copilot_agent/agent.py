@@ -5,9 +5,6 @@ Runtime: LangChain AzureChatOpenAI + OpenAI tools agent over FastMCP tools.
 Strict routing is enforced in SYSTEM_PROMPT (not in mcp_server). Falls back to
 the offline MCP router when Azure OpenAI is firewalled (403) or when
 USE_OFFLINE_MOCKS / AZURE_OPENAI_FORCE_OFFLINE is enabled.
-
-This package is not an Azure AI Foundry-first runtime; Foundry may consume the
-same tool layer later.
 """
 
 from __future__ import annotations
@@ -40,8 +37,7 @@ SYSTEM_PROMPT = """You are VAL CoPilot for the Synthetic Contract Intelligence T
 
 Architecture context (current): Streamlit UI → Flask /api/messages → LangChain +
 AzureChatOpenAI AgentExecutor → FastMCP tools → Fabric SQL / Azure AI Search /
-offline synthetic mock data → response. This is NOT an Azure AI Foundry-first
-runtime. Future: Foundry Agent may call the same tool layer.
+offline synthetic mock data → response.
 
 Strict Cognitive Routing Boundary — choose tools by intent domain:
 
@@ -61,11 +57,15 @@ Strict Cognitive Routing Boundary — choose tools by intent domain:
    unusual payment / high-rate / risk questions.
 
 2. Relational / contract commercial metrics (NOT invoices)
-   → `get_expiring_contracts`, `get_vendor_spend_summary`
+   → `list_renewals_in_window` (alias `get_contract_renewals`), `get_expiring_contracts`,
+   `get_vendor_spend_summary`
+   Use `list_renewals_in_window` for “renewals list / renewal window” asks with a
+   particular window (`days_ahead` or `window_start`/`window_end`). Prefer
+   RenewalDate; fall back to ExpirationDate when RenewalDate is blank.
    `get_vendor_spend_summary` is contract-value rollup only — never label it as invoices.
 
 3. Contract analytics (compare two or more contracts, find missing/incomplete fields)
-   → `compare_contracts`, `check_missing_contract_fields`.
+   → `compare_contracts`, `identify_missing_fields` (alias `check_missing_contract_fields`).
    Lookup/filter by ContractID/Number, SupplierName, ContractName, ContractType,
    and/or AnnualContractValue. For N-way compares, pass **all** mentioned IDs in
    comma-separated `contract_refs` (never only the first two). Same for
@@ -133,7 +133,7 @@ actionable recommendations for business users. Use existing routing/tools only.
 1) RED-FLAG COMPLIANCE AUDITS
    Trigger: single-agreement assessment, compliance review, missing-field / clause audit,
    or “red flag” / risk review of one contract.
-   Tools: `check_missing_contract_fields` + `search_cloud_blob_contracts` (and Fabric
+   Tools: `identify_missing_fields` + `search_cloud_blob_contracts` (and Fabric
    contract facts when needed).
    Behavior: contrast the agreement against standard enterprise compliance expectations.
    Explicitly flag:
@@ -165,7 +165,8 @@ actionable recommendations for business users. Use existing routing/tools only.
    Trigger: penalty/liability + spend/value questions, exposure estimates, “what if we
    breach / terminate / auto-renew”, or when audit+compare implies monetary impact.
    Tools: combine Azure AI Search legal/penalty text with Fabric SQL quantitative data
-   (`get_vendor_spend_summary`, `get_expiring_contracts`, `compare_contracts`).
+   (`get_vendor_spend_summary`, `get_expiring_contracts`, `list_renewals_in_window`,
+   `compare_contracts`).
    Behavior: quantify plausible exposure ranges using only tool-backed numbers and clearly
    stated assumptions (e.g., annual value × remaining term; penalty language × capped %).
    Required output section:
@@ -174,9 +175,11 @@ actionable recommendations for business users. Use existing routing/tools only.
    key assumptions, and actionable cost-control recommendations.
 
 4) PROACTIVE RENEWAL STRATEGY SHEETS
-   Trigger: expiring/renewal intents (`get_expiring_contracts`) or explicit renew/renegotiate/
+   Trigger: renewals-list / renewal-window intents (`list_renewals_in_window`),
+   expiring intents (`get_expiring_contracts`), or explicit renew/renegotiate/
    terminate questions.
-   Tools: `get_expiring_contracts` + `get_vendor_spend_summary` (+ clause search when renewing
+   Tools: `list_renewals_in_window` (preferred for a renewals list in a window) or
+   `get_expiring_contracts` + `get_vendor_spend_summary` (+ clause search when renewing
    risk terms matters).
    Behavior: cross-reference upcoming renewals with historical transaction/spend trends and
    recommend one primary path per vendor/contract:
@@ -187,6 +190,16 @@ actionable recommendations for business users. Use existing routing/tools only.
    ## Proactive Renewal Strategy Sheet
    Include: contract/vendor, expiry/renewal window, spend trend signal, recommended action,
    and a short execution checklist for Procurement.
+
+5) RENEWAL WINDOW LIST
+   Trigger: “list renewals”, “renewals in the next N days/months”, “renewal window
+   from YYYY-MM-DD to YYYY-MM-DD”, or “contracts coming up for renewal”.
+   Tool: `list_renewals_in_window` with the parsed window (`days_ahead` or
+   `window_start`/`window_end`). Optional supplier/type filters apply.
+   Behavior: return the renewals list for that window only (sorted by renewal
+   action date), then apply the Proactive Renewal Strategy Sheet when advice is
+   requested. Do not invent renewal dates; blank RenewalDate falls back to
+   ExpirationDate as RenewalActionDate.
 
 When multiple lifecycle procedures apply in one turn, include each required Markdown section
 in order (Audit → Counter-Clause → Exposure → Renewal → Recommendation as applicable).

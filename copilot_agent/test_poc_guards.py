@@ -596,6 +596,25 @@ def test_offline_router_missing_fields_routing() -> None:
     print("missing fields routing OK")
 
 
+def test_quick_action_prompt_routing() -> None:
+    """Validation UI Quick Action prompts must hit the matching MCP procedures."""
+    from offline_router import _choose_tools
+
+    cases = [
+        ("Detect overlapping contracts across vendors", "find_overlaps"),
+        ("Explain contract risk for high risk contracts", "explain_contract_risk"),
+        ("List upcoming renewals in the next 90 days", "list_renewals_in_window"),
+        (
+            "Audit missing clauses and incomplete contract fields",
+            "identify_missing_fields",
+        ),
+    ]
+    for prompt, tool in cases:
+        chosen = _choose_tools(prompt)
+        assert tool in chosen, (prompt, chosen)
+    print("quick action routing OK")
+
+
 if __name__ == "__main__":
     test_invoice_guardrail_hard_match()
     test_search_contracts_microsoft()
@@ -613,4 +632,5 @@ if __name__ == "__main__":
     test_offline_router_renewal_window_routing()
     test_identify_missing_fields_diagram_alias()
     test_offline_router_missing_fields_routing()
+    test_quick_action_prompt_routing()
     print("all POC guard checks passed")

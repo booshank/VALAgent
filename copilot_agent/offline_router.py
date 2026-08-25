@@ -80,12 +80,18 @@ _STRUCTURED_SEARCH_RE = re.compile(
     re.I,
 )
 _OVERLAP_RE = re.compile(
-    r"\b(overlap\w*|overlapping\s+contracts?|concurrent\s+contracts?)\b",
+    r"\b("
+    r"overlap\w*|overlapping\s+contracts?|concurrent\s+contracts?|"
+    r"detect\s+(?:tool\s+)?overlaps?|tool\s+overlaps?"
+    r")\b",
     re.I,
 )
 _RISK_RE = re.compile(
-    r"\b(unusual\s+payment\s+terms?|high\s+rates?|rate\s+card|contract\s+risk|"
-    r"explain\s+risk|risk\s+review|high\s+supplier\s+risk)\b",
+    r"\b("
+    r"unusual\s+payment\s+terms?|high\s+rates?|rate\s+card|contract\s+risk|"
+    r"explain\s+risk|risk\s+review|high\s+supplier\s+risk|"
+    r"high[\s-]?risk\s+contracts?|high[\s-]?risk"
+    r")\b",
     re.I,
 )
 _PROFILE_RE = re.compile(
@@ -97,9 +103,11 @@ _COMPARE_RE = re.compile(
     re.I,
 )
 _MISSING_RE = re.compile(
-    r"\b(missing|incomplete|blank|null|data\s*quality|completeness|required\s*field|"
+    r"\b("
+    r"missing|incomplete|blank|null|data\s*quality|completeness|required\s*field|"
     r"red[\s-]?flag|compliance|audit|indemnif\w*|liabilit\w*|sla|"
-    r"missing\s+renewal)\b",
+    r"missing\s+(?:renewal|clauses?)|audit\s+missing\s+clauses?"
+    r")\b",
     re.I,
 )
 _EXPOSURE_RE = re.compile(
@@ -114,6 +122,7 @@ _RENEWAL_LIST_RE = re.compile(
     r"\b("
     r"renewals?\s+list|list\s+(?:of\s+)?renewals?|renewal\s+window|"
     r"coming\s+up\s+for\s+renewal|up\s+for\s+renewal|"
+    r"upcoming\s+renewals?|"
     r"contracts?\s+(?:due\s+)?(?:for\s+)?renewal|find\s+renewals?"
     r")\b",
     re.I,

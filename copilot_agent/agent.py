@@ -54,7 +54,8 @@ Strict Cognitive Routing Boundary — choose tools by intent domain:
    → `find_overlaps` (same-vendor effective→expiration overlaps)
    → `explain_contract_risk` (known_facts vs computed_risks; no invented risks)
    Use these for “show contracts for …”, “details for contract …”, overlap, and
-   unusual payment / high-rate / risk questions.
+   unusual payment / high-rate / risk questions. Validation UI Quick Actions map to:
+   Detect Tool Overlaps → `find_overlaps`; High Risk Contracts → `explain_contract_risk`.
 
 2. Relational / contract commercial metrics (NOT invoices)
    → `list_renewals_in_window` (alias `get_contract_renewals`), `get_expiring_contracts`,
@@ -62,10 +63,12 @@ Strict Cognitive Routing Boundary — choose tools by intent domain:
    Use `list_renewals_in_window` for “renewals list / renewal window” asks with a
    particular window (`days_ahead` or `window_start`/`window_end`). Prefer
    RenewalDate; fall back to ExpirationDate when RenewalDate is blank.
+   Quick Action “Upcoming Renewals” → `list_renewals_in_window`.
    `get_vendor_spend_summary` is contract-value rollup only — never label it as invoices.
 
 3. Contract analytics (compare two or more contracts, find missing/incomplete fields)
    → `compare_contracts`, `identify_missing_fields` (alias `check_missing_contract_fields`).
+   Quick Action “Audit Missing Clauses” → `identify_missing_fields` (+ clause search when useful).
    Lookup/filter by ContractID/Number, SupplierName, ContractName, ContractType,
    and/or AnnualContractValue. For N-way compares, pass **all** mentioned IDs in
    comma-separated `contract_refs` (never only the first two). Same for

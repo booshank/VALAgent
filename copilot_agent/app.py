@@ -15,6 +15,7 @@ import asyncio
 import logging
 import sys
 import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,6 +26,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from agent import run_turn
 from config import get
+from response_time import append_response_time, strip_response_time
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
@@ -101,13 +103,18 @@ def _history_messages(conversation_id: str) -> list[Any]:
         if role in {"user", "human"}:
             messages.append(HumanMessage(content=content))
         elif role in {"assistant", "ai"}:
-            messages.append(AIMessage(content=content))
+            messages.append(AIMessage(content=strip_response_time(content)))
     return messages
 
 
-def _build_reply(activity: dict[str, Any], text: str) -> dict[str, Any]:
+def _build_reply(
+    activity: dict[str, Any],
+    text: str,
+    *,
+    response_time_ms: int | None = None,
+) -> dict[str, Any]:
     now = datetime.now(timezone.utc).isoformat()
-    return {
+    reply: dict[str, Any] = {
         "type": "message",
         "id": str(uuid.uuid4()),
         "timestamp": now,
@@ -119,6 +126,13 @@ def _build_reply(activity: dict[str, Any], text: str) -> dict[str, Any]:
         "text": text,
         "serviceUrl": activity.get("serviceUrl") or "",
     }
+    if response_time_ms is not None:
+        reply["responseTimeMs"] = int(response_time_ms)
+        channel_data = activity.get("channelData")
+        merged = dict(channel_data) if isinstance(channel_data, dict) else {}
+        merged["responseTimeMs"] = int(response_time_ms)
+        reply["channelData"] = merged
+    return reply
 
 
 @app.get("/health")
@@ -302,6 +316,7 @@ def messages() -> Any:
                 persona_id=persona_id,
             )
 
+    started = time.perf_counter()
     try:
         answer = _submit(
             run_turn(
@@ -314,6 +329,16 @@ def messages() -> Any:
     except Exception as exc:  # noqa: BLE001
         logger.exception("Agent turn failed")
         answer = f"Sorry — I hit an error while processing that: {exc}"
+    elapsed = time.perf_counter() - started
+
+    response_time_ms = int(round(elapsed * 1000))
+    answer = append_response_time(str(answer), elapsed)
+    logger.info(
+        "Turn complete conversationId=%s personaId=%s responseTimeMs=%s",
+        conversation_id,
+        persona_id,
+        response_time_ms,
+    )
 
     if not client_persists:
         store.append_message(
@@ -325,7 +350,7 @@ def messages() -> Any:
         )
         store.update_latest_search_preview(persona_id, conversation_id, str(answer))
 
-    reply = _build_reply(activity, answer)
+    reply = _build_reply(activity, answer, response_time_ms=response_time_ms)
     return jsonify(reply), 200
 
 

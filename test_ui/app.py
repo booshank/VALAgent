@@ -199,7 +199,6 @@ def _load_messages(conversation_id: str) -> list[dict]:
         {
             "role": item["role"],
             "content": item["content"],
-            "meta": item.get("meta"),
         }
         for item in loaded
     ]
@@ -456,8 +455,7 @@ def main() -> None:
     st.title("VAL CoPilot — Validation UI")
     st.caption(
         "Structural integration harness with persistent persona memory. "
-        "Traffic is mocked as Bot Framework activities and sent only to the "
-        "Cognitive Routing Agent."
+        "Posts chat turns to the Cognitive Routing Agent and shows reply text only."
     )
 
     with st.sidebar:
@@ -472,9 +470,6 @@ def main() -> None:
         for item in st.session_state.messages:
             with st.chat_message(item["role"]):
                 st.markdown(item["content"])
-                if item.get("meta"):
-                    with st.expander("Bot Framework exchange"):
-                        st.json(item["meta"])
 
     # chat_input must stay at the root of the page script (not nested in columns).
     prompt = st.session_state.pending_prompt or st.chat_input("Send a validation message…")
@@ -505,12 +500,10 @@ def main() -> None:
                     else None
                 ) or f"(HTTP {result['status_code']}) {body}"
                 st.markdown(reply_text)
-                with st.expander("Bot Framework exchange"):
-                    st.json(result)
                 st.session_state.messages.append(
-                    {"role": "assistant", "content": reply_text, "meta": result}
+                    {"role": "assistant", "content": reply_text}
                 )
-                _persist_turn("assistant", reply_text, meta=result)
+                _persist_turn("assistant", reply_text)
             except requests.RequestException as exc:
                 err = f"Request failed: {exc}"
                 st.error(err)

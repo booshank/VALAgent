@@ -199,7 +199,6 @@ def _load_messages(conversation_id: str) -> list[dict]:
         {
             "role": item["role"],
             "content": item["content"],
-            "meta": item.get("meta"),
         }
         for item in loaded
     ]
